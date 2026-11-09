@@ -1,0 +1,35 @@
+# External DNS Helm values – sablon.
+# A __...__ helyeket a létrehozó script tölti ki a Terraform-kimenetekből
+# (terraform output), az eredmény: k8s/external-dns.<env>.values.yaml
+---
+logFormat: text
+podLabels:
+  azure.workload.identity/use: "true"
+
+sources:
+  - ingress
+
+provider:
+  name: azure
+policy: sync
+registry: txt
+triggerLoopOnEvent: true
+
+txtOwnerId: __TXT_OWNER_ID__
+domainFilters:
+  - __DNS_ZONE__
+serviceAccount:
+  annotations:
+    azure.workload.identity/client-id: __CLIENT_ID__
+secretConfiguration:
+  enabled: true
+  data:
+    azure.json: |
+      {
+        "subscriptionId": "__SUBSCRIPTION_ID__",
+        "resourceGroup": "__IDENTITY_RG__",
+        "useWorkloadIdentityExtension": true
+      }
+  mountPath: /etc/kubernetes
+extraArgs:
+  - --azure-resource-group=__DNS_RG__

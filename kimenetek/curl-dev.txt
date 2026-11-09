@@ -1,0 +1,2 @@
+$ curl -sk https://colors.project-x.dev.vighsandor.az.cubix-pe.hu
+(nincs válasz – DNS-gyorsítótár? Próbáld újra pár perc múlva.)

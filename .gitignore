@@ -1,0 +1,12 @@
+# Terraform munkakönyvtár és ideiglenes fájlok
+.terraform/
+tfplan
+*.tfstate.backup
+crash.log
+
+# A state élő példánya a backendben van; a repóba csak a
+# terraform/<env>/state/ alatti pillanatkép kerül (az nincs kizárva).
+
+# A létrehozó script által generált Helm values (a Terraform-kimenetekből)
+k8s/external-dns.*.values.yaml
+!k8s/external-dns.values.tmpl.yaml

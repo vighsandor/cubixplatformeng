@@ -1,0 +1,162 @@
+Name                     Location       Status
+-----------------------  -------------  ---------
+azure-signup-rg          eastus         Succeeded
+course-baseline          swedencentral  Succeeded
+NetworkWatcherRG         swedencentral  Succeeded
+project-x-sbx-aks        swedencentral  Succeeded
+project-x-sbx-dns        swedencentral  Succeeded
+project-x-sbx-aks-nodes  swedencentral  Succeeded
+Name           Location       ResourceGroup      KubernetesVersion    CurrentKubernetesVersion    ProvisioningState    Fqdn
+-------------  -------------  -----------------  -------------------  --------------------------  -------------------  ------------------------------------------------------
+project-x-sbx  swedencentral  project-x-sbx-aks  1.36.3               1.36.3                      Succeeded            project-x-sbx-dns-oh1ja1vx.hcp.swedencentral.azmk8s.io
+
+[
+  {
+    "etag": "77f79121-66ee-4cf4-ad20-4d9909197616",
+    "id": "/subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/course-baseline/providers/Microsoft.Network/dnszones/vighsandor.az.cubix-pe.hu",
+    "location": "global",
+    "maxNumberOfRecordSets": 10000,
+    "name": "vighsandor.az.cubix-pe.hu",
+    "nameServers": [
+      "ns1-05.azure-dns.com.",
+      "ns2-05.azure-dns.net.",
+      "ns3-05.azure-dns.org.",
+      "ns4-05.azure-dns.info."
+    ],
+    "numberOfRecordSets": 4,
+    "resourceGroup": "course-baseline",
+    "tags": {},
+    "type": "Microsoft.Network/dnszones",
+    "zoneType": "Public"
+  },
+  {
+    "etag": "4f23eb65-0510-4d53-9dd9-b9c6d2271e45",
+    "id": "/subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-sbx-dns/providers/Microsoft.Network/dnszones/project-x.sbx.vighsandor.az.cubix-pe.hu",
+    "location": "global",
+    "maxNumberOfRecordSets": 10000,
+    "name": "project-x.sbx.vighsandor.az.cubix-pe.hu",
+    "nameServers": [
+      "ns1-09.azure-dns.com.",
+      "ns2-09.azure-dns.net.",
+      "ns3-09.azure-dns.org.",
+      "ns4-09.azure-dns.info."
+    ],
+    "numberOfRecordSets": 4,
+    "resourceGroup": "project-x-sbx-dns",
+    "tags": {
+      "environment": "sbx",
+      "expires": "2027-02-09",
+      "managed_by": "terraform",
+      "owner": "platformengineer@vighsandor.hu",
+      "project": "project-x"
+    },
+    "type": "Microsoft.Network/dnszones",
+    "zoneType": "Public"
+  }
+]
+TTL     Fqdn                                               Name      ProvisioningState    ResourceGroup
+------  -------------------------------------------------  --------  -------------------  -----------------
+172800  project-x.sbx.vighsandor.az.cubix-pe.hu.           @         Succeeded            project-x-sbx-dns
+3600    project-x.sbx.vighsandor.az.cubix-pe.hu.           @         Succeeded            project-x-sbx-dns
+300     a-colors.project-x.sbx.vighsandor.az.cubix-pe.hu.  a-colors  Succeeded            project-x-sbx-dns
+300     colors.project-x.sbx.vighsandor.az.cubix-pe.hu.    colors    Succeeded            project-x-sbx-dns
+NAMESPACE            NAME                                                       READY   STATUS    RESTARTS        AGE
+cert-manager         pod/cert-manager-687c8dcfbb-2vq2r                          1/1     Running   0               96s
+cert-manager         pod/cert-manager-cainjector-5bfdf76ddd-slkzj               1/1     Running   0               96s
+cert-manager         pod/cert-manager-webhook-578b8cbb44-rhpxq                  1/1     Running   0               96s
+colors               pod/colors-colors-demo-app-5ffff85675-dddkp                1/1     Running   0               63s
+external-dns         pod/external-dns-6cc8b86d8-qrrxd                           1/1     Running   0               2m
+ingress-controller   pod/traefik-68895f75cb-qhl4n                               1/1     Running   0               2m31s
+kube-system          pod/azure-cns-6rwq5                                        2/2     Running   0               4m18s
+kube-system          pod/azure-ip-masq-agent-54dlw                              1/1     Running   0               4m18s
+kube-system          pod/azure-wi-webhook-controller-manager-58db98bffb-w685h   1/1     Running   1 (3m29s ago)   4m37s
+kube-system          pod/azure-wi-webhook-controller-manager-58db98bffb-zbwcr   1/1     Running   1 (3m24s ago)   4m37s
+kube-system          pod/cloud-node-manager-fzm42                               1/1     Running   0               4m18s
+kube-system          pod/coredns-5bf45f87d-wgvq5                                1/1     Running   0               4m37s
+kube-system          pod/coredns-5bf45f87d-x2h9v                                1/1     Running   0               3m34s
+kube-system          pod/coredns-autoscaler-7467554f77-q5qnk                    1/1     Running   0               4m37s
+kube-system          pod/csi-azuredisk-node-zvwcz                               3/3     Running   0               4m18s
+kube-system          pod/csi-azurefile-node-xbtzj                               4/4     Running   0               4m18s
+kube-system          pod/konnectivity-agent-5854c8f68c-bx2d9                    1/1     Running   0               4m34s
+kube-system          pod/konnectivity-agent-5854c8f68c-cvtr9                    1/1     Running   0               3m34s
+kube-system          pod/konnectivity-agent-autoscaler-5b658f6697-984jx         1/1     Running   0               4m34s
+kube-system          pod/kube-proxy-tqbc6                                       1/1     Running   0               4m18s
+kube-system          pod/metrics-server-dff79fd46-99r24                         2/2     Running   0               3m17s
+kube-system          pod/metrics-server-dff79fd46-cv7g9                         2/2     Running   0               3m17s
+
+NAMESPACE   NAME                                               CLASS     HOSTS                                            ADDRESS          PORTS     AGE
+colors      ingress.networking.k8s.io/colors-colors-demo-app   traefik   colors.project-x.sbx.vighsandor.az.cubix-pe.hu   172.130.16.222   80, 443   63s
+
+NAMESPACE   NAME                                        READY   AGE
+            clusterissuer.cert-manager.io/letsencrypt   True    68s
+
+NAMESPACE            NAME                                                            TYPE                            DATA   AGE
+cert-manager         secret/cert-manager-webhook-ca                                  Opaque                          3      91s
+cert-manager         secret/letsencrypt-account-key                                  Opaque                          1      69s
+cert-manager         secret/sh.helm.release.v1.cert-manager.v1                       helm.sh/release.v1              1      100s
+colors               secret/blue-tls                                                 kubernetes.io/tls               2      10s
+colors               secret/sh.helm.release.v1.colors.v1                             helm.sh/release.v1              1      64s
+external-dns         secret/external-dns                                             Opaque                          1      2m2s
+external-dns         secret/sh.helm.release.v1.external-dns.v1                       helm.sh/release.v1              1      2m3s
+ingress-controller   secret/sh.helm.release.v1.traefik.v1                            helm.sh/release.v1              1      2m34s
+kube-system          secret/azure-wi-webhook-server-cert                             Opaque                          3      5m53s
+kube-system          secret/bootstrap-token-rsffxs                                   bootstrap.kubernetes.io/token   4      5m40s
+kube-system          secret/konnectivity-certs                                       Opaque                          3      4m35s
+kube-system          secret/sh.helm.release.v1.aks-managed-overlay-upgrade-data.v4   helm.sh/release.v1              1      2m29s
+kube-system          secret/sh.helm.release.v1.aks-managed-overlay-upgrade-data.v5   helm.sh/release.v1              1      24s
+kube-system          secret/sh.helm.release.v1.aks-managed-workload-identity.v2      helm.sh/release.v1              1      3m33s
+kube-system          secret/sh.helm.release.v1.aks-managed-workload-identity.v3      helm.sh/release.v1              1      113s
+
+NAMESPACE   NAME                           STATUS   AGE
+            namespace/cert-manager         Active   100s
+            namespace/colors               Active   65s
+            namespace/default              Active   6m15s
+            namespace/external-dns         Active   2m3s
+            namespace/ingress-controller   Active   2m35s
+            namespace/kube-node-lease      Active   6m15s
+            namespace/kube-public          Active   6m15s
+            namespace/kube-system          Active   6m15s
+ClientId                              IsolationScope    Location       Name                       PrincipalId                           ResourceGroup            TenantId
+------------------------------------  ----------------  -------------  -------------------------  ------------------------------------  -----------------------  ------------------------------------
+35c90641-7ded-4d2d-8974-3e841b526156  None              swedencentral  project-x-sbx-aks          420013ba-7f4a-48cb-bf05-668a669c6c8d  project-x-sbx-aks        c9b482b1-d17b-430e-bbe6-5d64ba800aa1
+3e203fbd-4a47-43a0-9919-8fbe5437cf32  None              swedencentral  project-x-sbx-externaldns  d086277a-33a7-47ad-bc70-ff1b06ac6ac8  project-x-sbx-aks        c9b482b1-d17b-430e-bbe6-5d64ba800aa1
+0d2b4508-25fc-4d3f-b717-d98b4a34665c  None              swedencentral  project-x-sbx-agentpool    aeb94da5-b4cd-4a32-b48f-47c7b09c6df4  project-x-sbx-aks-nodes  c9b482b1-d17b-430e-bbe6-5d64ba800aa1
+Issuer                                                                                                                   Name          ResourceGroup      Subject
+-----------------------------------------------------------------------------------------------------------------------  ------------  -----------------  -----------------------------------------------
+https://swedencentral.oic.prod-aks.azure.com/c9b482b1-d17b-430e-bbe6-5d64ba800aa1/8db7a424-c2cc-487b-bda4-49a81bcafa92/  external-dns  project-x-sbx-aks  system:serviceaccount:external-dns:external-dns
+CreatedDateTime       Description                                DisplayName                    IsAssignableToRole    MailEnabled    MailNickname    RenewedDateTime       SecurityEnabled    SecurityIdentifier
+--------------------  -----------------------------------------  -----------------------------  --------------------  -------------  --------------  --------------------  -----------------  --------------------------------------------------
+2026-11-09T15:42:28Z  project-x sbx környezet fejlesztői (írás)  project-x-sbx-developers       False                 False          01d98f81-9      2026-11-09T15:42:28Z  True               S-1-12-1-86427182-1204094678-1165799335-3560982494
+2026-11-09T15:42:28Z  project-x sbx környezet platformadminjai   project-x-sbx-platform-admins  False                 False          a4355f88-b      2026-11-09T15:42:28Z  True               S-1-12-1-1803399906-1219421779-371626414-465318757
+Principal                                                                       Role                                         Scope
+------------------------------------------------------------------------------  -------------------------------------------  --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+platformengineer_vighsandor.hu#EXT#@platformengineervighsandor.onmicrosoft.com  Owner                                        /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449
+platformengineer_vighsandor.hu#EXT#@platformengineervighsandor.onmicrosoft.com  Storage Blob Data Contributor                /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/course-baseline/providers/Microsoft.Storage/storageAccounts/platencbvighsandor
+3e203fbd-4a47-43a0-9919-8fbe5437cf32                                            DNS Zone Contributor                         /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-sbx-dns/providers/Microsoft.Network/dnsZones/project-x.sbx.vighsandor.az.cubix-pe.hu
+35c90641-7ded-4d2d-8974-3e841b526156                                            Network Contributor                          /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-sbx-aks/providers/Microsoft.Network/virtualNetworks/project-x-sbx-network/subnets/project-x-sbx-aks-nodes
+35c90641-7ded-4d2d-8974-3e841b526156                                            Contributor                                  /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-sbx-aks-nodes
+project-x-sbx-developers                                                        Azure Kubernetes Service Cluster User Role   /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-sbx-aks/providers/Microsoft.ContainerService/managedClusters/project-x-sbx
+project-x-sbx-platform-admins                                                   Azure Kubernetes Service RBAC Cluster Admin  /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-sbx-aks/providers/Microsoft.ContainerService/managedClusters/project-x-sbx
+project-x-sbx-developers                                                        Azure Kubernetes Service RBAC Writer         /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-sbx-aks/providers/Microsoft.ContainerService/managedClusters/project-x-sbx
+project-x-sbx-platform-admins                                                   Azure Kubernetes Service Cluster User Role   /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-sbx-aks/providers/Microsoft.ContainerService/managedClusters/project-x-sbx
+data.azurerm_client_config.current
+data.azurerm_dns_zone.parent
+azuread_group.developers
+azuread_group.platform_admins
+azuread_group_member.platform_admins["2477da76-ba77-4008-8ac9-9bda97840fa2"]
+azurerm_dns_ns_record.delegation
+azurerm_dns_zone.env
+azurerm_federated_identity_credential.external_dns
+azurerm_kubernetes_cluster.aks
+azurerm_resource_group.aks
+azurerm_resource_group.dns
+azurerm_role_assignment.aks["developers-cluster_user"]
+azurerm_role_assignment.aks["developers-writer"]
+azurerm_role_assignment.aks["platform_admins-cluster_admin"]
+azurerm_role_assignment.aks["platform_admins-cluster_user"]
+azurerm_role_assignment.aks_subnet_network_contributor
+azurerm_role_assignment.external_dns_zone_contributor
+azurerm_subnet.aks_nodes
+azurerm_user_assigned_identity.aks
+azurerm_user_assigned_identity.external_dns
+azurerm_virtual_network.aks
