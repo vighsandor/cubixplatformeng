@@ -59,7 +59,7 @@ Az eredmény: a fejlesztő egyetlen Ingress-erőforrással **névvel elérhető,
 | Méret | 1 node, `Standard_D2as_v5` (2 vCPU, 8 GiB RAM) | A kvóta szűkös: a Standard DASv5 családra 4 vCPU, a régióra összesen 8 vCPU jut. Nagyobb gépet csak indoklással adok. |
 | Frissítés | Az automatikus frissítés ki van kapcsolva | Rövid életű, eltakarítandó környezetekről van szó; a verziót én tartom kézben (Terraform-változó). |
 | **Változtatás** | **Minden változás pull requesten keresztül megy, és csak a pipeline módosítja az infrastruktúrát** | A fő ágra közvetlenül senki nem pusholhat (én sem). Minden változáshoz tartozik egy plan, egy review és egy futási napló: visszakövethető, ki, mit, mikor és miért változtatott (auditálhatóság). A portálon kézzel nem módosítok, mert az driftet okoz. |
-| Jogosultság | Jogot csak Entra ID-csoport kap, személy soha | Csoportokkal a jogosultságkezelés skálázható és követhető. Ha valaki elhagyja a projektet, elég kivenni a csoportból (egy sor törlése a `tfvars`-ból). |
+| Jogosultság | Jogot csak Entra ID-csoport kap, személy soha. Egyetlen kivétel a pipeline gépi identitása (4.3). | Csoportokkal a jogosultságkezelés skálázható és követhető. Ha valaki elhagyja a projektet, elég kivenni a csoportból (egy sor törlése a `tfvars`-ból). |
 | Gépi hozzáférés | Titkos kulcsot nem használok; a gépi identitás managed identity, federated credentiallel | A lejáró, kézzel forgatandó titkok kezelése hibalehetőség és biztonsági kockázat. A GitHub repóban nincs Azure-jelszó, csak azonosítók. |
 | Legkisebb jogosultság | Az External DNS identitása csak *DNS Zone Contributor* szerepkört kap, és csak a saját környezete alzónáján | Ha egy környezet komponense kompromittálódik, más környezet DNS-éhez akkor sem fér hozzá. |
 | DNS | A hosztnevek automatikusan jönnek létre, de csak a környezet saját alzónáján belül | Az External DNS `domainFilters` beállítása a zónán kívüli hosztneveket figyelmen kívül hagyja. |
@@ -103,7 +103,7 @@ Minden erőforrás nevébe beleteszem a **projekt** és a **környezet** jelét,
 
 | Csoport | Minta | Tagok (`tfvars`) | Szerepkörök a clusteren |
 |---|---|---|---|
-| Platformadminok | `<projekt>-<env>-platform-admins` | `platform_admins` (én) + `platform_admin_service_principals` (a pipeline: `github-repos`) | Azure Kubernetes Service **RBAC Cluster Admin**, **Cluster User Role** |
+| Platformadminok | `<projekt>-<env>-platform-admins` | `platform_admins` (én) + `platform_admin_service_principals` (a pipeline: `github-repos`) | Azure Kubernetes Service **RBAC Cluster Admin**, **Cluster User Role**; a pipeline identitása ezen felül közvetlenül is RBAC Cluster Admin (4.3) |
 | Fejlesztők (írás) | `<projekt>-<env>-developers` | `developers` | Azure Kubernetes Service **RBAC Writer**, **Cluster User Role** |
 | Olvasók | `<projekt>-<env>-readers` | `readers` | Azure Kubernetes Service **RBAC Reader**, **Cluster User Role** |
 
@@ -279,7 +279,7 @@ Ez a fejezet az én futtatókönyvem. Minden lépésnél leírom, mit csinálok,
                                             Terraform Apply (env) ×N ──────► ├─ Blob Data Contributor a state-en
                                             (pontosan a plan-t alkalmazza)   ├─ Groups Administrator (Entra)
                                                                              ├─ Directory Readers (Entra)
-                                                                             └─ platform-admins tag -> AKS cluster-admin
+                                                                             └─ AKS RBAC Cluster Admin (közvetlenül) ->
                                                                                 (a Helm-telepítésekhez)
 ```
 
@@ -381,7 +381,7 @@ resource "terraform_data" "workspace_guard" {
 
 **A Kubernetesen belüli rész is Terraform.** A Helm providerrel a Terraform ugyanabban a futásban, ugyanabból a kódból telepíti a Traefiket, az External DNS-t, a cert-managert, a ClusterIssuert és a demóalkalmazást. Ennek fő előnye, hogy **a Terraform-erőforrások közvetlenül elérhetők**: az External DNS values-ába a managed identity Client ID-ja, a zóna neve és a resource groupok neve közvetlenül az erőforrásokból kerül, nincs kézi másolás vagy sablonkitöltés. (A másik út, a Helm-parancsok a pipeline-ban, azt jelentené, hogy minden Helm-műveletet és -kapcsolót a pipeline-ban újra kellene implementálni.)
 
-- **Bejelentkezés a clusterbe:** az AKS-en nincsenek helyi fiókok, ezért a Helm provider a `kubelogin`-nal kér tokent az Azure CLI bejelentkezéséből (`--login azurecli`). Helyben ez a saját fiókom, a pipeline-ban a `github-repos` identitás; ezért a pipeline identitása is tagja a platform-admins csoportnak (`platform_admin_service_principals`).
+- **Bejelentkezés a clusterbe:** az AKS-en nincsenek helyi fiókok, ezért a Helm provider a `kubelogin`-nal kér tokent az Azure CLI bejelentkezéséből (`--login azurecli`). Helyben ez a saját fiókom, a pipeline-ban a `github-repos` identitás; ezért a pipeline identitásának (`platform_admin_service_principals`) cluster-admin jog kell. A pipeline identitása tagja a platform-admins csoportnak, és **közvetlenül is megkapja** az *Azure Kubernetes Service RBAC Cluster Admin* szerepkört (`azurerm_role_assignment.aks_pipeline`). Erre azért van szükség, mert a pipeline az AKS-tokent a futás elején kéri, amikor egy új környezet csoportjának még nem tagja. A token `groups` claimjéből így hiányzik a csoport, és a csoporton keresztüli jog csak a következő futásban működne. A közvetlen szerepkör-hozzárendelést az Azure szerveroldalon értékeli ki. Ez a „jogot csak csoport kap” szabály egyetlen, tudatos kivétele, és egy gépi identitásra vonatkozik, nem személyre.
 - **A ClusterIssuer** nem chart, hanem egy sima Kubernetes-erőforrás. A Helm provider nem tud nyers manifestet telepíteni, a Kubernetes provider pedig a CRD-k miatt nehézkes, ezért a `bedag/raw` „csomagoló” chartot használom: a chart a values-ban kapott erőforrásokat telepíti.
 - **Várakozás az RBAC-ra:** új környezetnél a csoporttagság és az AKS-szerepkör néhány perc alatt lép életbe. A Helm-telepítések egy `time_sleep` (180 s) után indulnak, különben az első futás 403-at kapna.
 - **Sorrend:** a függőségek miatt a Terraform maga rendezi: AKS → szerepkörök → várakozás → Traefik, External DNS, cert-manager → ClusterIssuer → demóalkalmazás.
@@ -510,6 +510,7 @@ az login
 | `Error acquiring the state lock` | Egy másik futás (pl. egy merge apply-ja) épp ugyanazt a környezetet zárolja | A futás 10 percig vár; ha így is elbukik, *Re-run all jobs* |
 | A workspace-védelem hibát ad | A workspace és az `env_name` nem egyezik (pl. elgépelt fájlnév) | A `tfvars` fájl neve, az `env_name` és a workspace legyen azonos |
 | `helm_release`: *Unauthorized* / *forbidden* az első futáskor | Az AKS-szerepkör vagy a csoporttagság még nem lépett életbe | *Re-run all jobs* (az új plan már csak a hiányzó részt tartalmazza) |
+| `helm_release`: *… is forbidden: User "<object ID>" cannot … User does not have access to the resource in Azure* új környezet első futásakor | A pipeline AKS-tokenje a futás elején készült, amikor az identitás még nem volt tagja az új platform-admins csoportnak | A pipeline identitása közvetlen szerepkört kap (`aks_pipeline`), ezért ez nem fordulhat elő. Régebbi kódnál: *Re-run all jobs*, az új futás tokenje már tartalmazza a csoportot. |
 | `kubelogin: executable file not found` | Hiányzik a kubelogin (a pipeline-ban az `azure/use-kubelogin` lépés, helyben a telepítés) | Telepítés |
 | `helm_release`: *Kubernetes cluster unreachable … exec: executable kubelogin failed with exit code 1* (az AKS létrehozása után), vagy *AADSTS700024: Client assertion is not within its valid time range* | A GitHub OIDC-tokenje csak néhány percig érvényes. Ha az Azure CLI csak az AKS létrehozása után (10+ perc) kér tokent az AKS scope-ra, a kérés már lejárt tokennel menne. | A workflow a bejelentkezés után rögtön kér egy AKS-tokent (*AKS-token előtöltése* lépés), amely kb. 60–90 percig érvényes. Ha mégis előfordul: *Re-run **all** jobs*, mert a csak az apply-t újrafuttató próbálkozás elavult plan-nel indulna (*Saved plan is stale*). |
 | A PR-on a merge gomb szürke: *This branch is out-of-date* | A ruleset csak naprakész ágat enged merge-ölni | *Update branch* a PR-on, utána a plan újra fut |
