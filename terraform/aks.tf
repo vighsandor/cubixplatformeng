@@ -57,6 +57,13 @@ resource "azurerm_kubernetes_cluster" "aks" {
     vm_size        = var.node_vm_size
     os_sku         = "Ubuntu"
     vnet_subnet_id = azurerm_subnet.aks_nodes.id
+
+    # Az Azure a node pool létrehozásakor magától beállítja ezt az alapértéket
+    # (max_surge = 10%). Ha a kódban nincs benne, minden plan "törölné", így a
+    # változatlan kód is folyamatosan 1 módosítást mutatna. Az Azure-alapértéket rögzítem.
+    upgrade_settings {
+      max_surge = "10%"
+    }
   }
 
   identity {
