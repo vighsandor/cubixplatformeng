@@ -120,6 +120,20 @@ resource "azurerm_role_assignment" "aks" {
   principal_type       = "Group"
 }
 
+# A pipeline identitása (github-repos) közvetlenül is megkapja a cluster-admin
+# jogot. A csoporttagság egy új környezetnél nem elég neki: a pipeline az
+# AKS-tokent a futás elején kéri (a GitHub OIDC-token csak percekig érvényes),
+# amikor még nem tagja az épp most létrehozott csoportnak, így a token
+# "groups" claimjéből hiányzik a csoport. A közvetlen szerepkör-hozzárendelést
+# az Azure szerveroldalon értékeli ki, ezért ugyanabban a futásban működik.
+resource "azurerm_role_assignment" "aks_pipeline" {
+  for_each             = var.platform_admin_service_principals
+  scope                = azurerm_kubernetes_cluster.aks.id
+  role_definition_name = "Azure Kubernetes Service RBAC Cluster Admin"
+  principal_id         = data.azuread_service_principal.member[each.value].object_id
+  principal_type       = "ServicePrincipal"
+}
+
 # Az RBAC-jog és a csoporttagság néhány perc alatt lép életbe. A Kubernetesen
 # belüli telepítések (Helm) csak ezután indulnak, különben 403-at kapnának.
 resource "time_sleep" "rbac_propagation" {
@@ -127,6 +141,7 @@ resource "time_sleep" "rbac_propagation" {
 
   depends_on = [
     azurerm_role_assignment.aks,
+    azurerm_role_assignment.aks_pipeline,
     azuread_group_member.env,
   ]
 }
