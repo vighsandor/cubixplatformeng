@@ -1,0 +1,31 @@
+# =============================================================================
+# Környezetigénylés – sablon
+# Másold le environments/<env>.tfvars néven, töltsd ki, és nyiss vele pull
+# requestet (lásd: dokumentacio/kornyezetigenyles.md, 3. fejezet).
+# =============================================================================
+
+project_name = "<projekt>"   # kisbetű, szám, kötőjel; max. 15 karakter
+env_name     = "<env>"       # = a fájl neve, pl. dev
+expires      = "ÉÉÉÉ-HH-NN"  # lejárat, max. 3 hónap
+
+# A platform engineer tölti ki (a következő szabad /12):
+vnet_address_space = "10.x.0.0/12"
+node_subnet_prefix = "10.x.0.0/24"
+
+# Hozzáférés: név => Entra ID UPN (userPrincipalName)
+platform_admins = {
+  vighsandor = "platformengineer_vighsandor.hu#EXT#@platformengineervighsandor.onmicrosoft.com"
+}
+platform_admin_service_principals = {
+  github-actions = "github-repos"
+}
+developers = {
+  # vezeteknev = "upn@tenant.onmicrosoft.com"
+}
+readers = {
+  # vezeteknev = "upn@tenant.onmicrosoft.com"
+}
+
+# Opcionális (csak indoklással):
+# node_vm_size = "Standard_D2as_v5"
+# node_count   = 1

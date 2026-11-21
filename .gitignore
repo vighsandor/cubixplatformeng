@@ -1,12 +1,15 @@
-# Terraform munkakönyvtár és ideiglenes fájlok
+# Terraform
 .terraform/
-tfplan
-*.tfstate.backup
+*.tfstate
+*.tfstate.*
 crash.log
-
-# A state élő példánya a backendben van; a repóba csak a
-# terraform/<env>/state/ alatti pillanatkép kerül (az nincs kizárva).
-
-# A létrehozó script által generált Helm values (a Terraform-kimenetekből)
-k8s/external-dns.*.values.yaml
-!k8s/external-dns.values.tmpl.yaml
+tfplan
+tfplan.tar.gz
+*.tfplan
+override.tf
+override.tf.json
+*_override.tf
+# helyi titkok, kubeconfig
+*.auto.tfvars
+.env
+kubeconfig*

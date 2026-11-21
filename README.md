@@ -1,42 +1,37 @@
 # Cubix Platform Engineering – Project X miniplatform
 
-**3. hét – Infrastructure as Code** (`platformeng-w3` ág, `week3-iac` tag)
+**4. hét: GitHub Actions pipeline és teljes Terraform** (tag: `week4-pipeline-tf`, fő ág: `platformeng-w3`)
 
-Az eddig ClickOps-szal felépített infrastruktúra Terraformban: resource groupok, hálózat, AKS, managed identityk, workload identity federation, DNS-alzóna és -delegáció, Entra ID-csoportok, tagságok és szerepkörök – a `sbx` és a `dev` környezetre, kóddal és state-tel együtt. A Kubernetesen belüli komponensek (Traefik, External DNS, cert-manager, demóalkalmazás) ezen a héten szándékosan kézi, Helm-es lépések.
+A Project X fejlesztői pull requesttel igényelnek környezetet. A pipeline pull requestre `fmt` + `validate` + `plan` lépést futtat, a fő ágra merge után pedig `apply`-t. A Terraform az Azure- és Entra ID-erőforrások mellett a Kubernetesen belüli platformkomponenseket is telepíti (Traefik, External DNS, cert-manager, ClusterIssuer, demóalkalmazás). A környezetek egy kódból, Terraform workspace-ekkel és környezetenkénti `tfvars` fájlokkal jönnek létre.
 
-## Beadandó
+## Leadott anyagok
 
-| Elem | Hol |
+| Elvárás | Hol található |
 |---|---|
-| A környezetigénylési leírás (frissítve, 3.0) | [`dokumentacio/kornyezetigenyles.md`](dokumentacio/kornyezetigenyles.md) |
-| Igénylőlap-sablon | [`dokumentacio/igenyleslap-sablon.md`](dokumentacio/igenyleslap-sablon.md) |
-| Terraform-kód – sandbox | [`terraform/sbx/`](terraform/sbx/) |
-| Terraform-kód – dev | [`terraform/dev/`](terraform/dev/) |
-| Terraform state – sandbox / dev | [`terraform/sbx/state/`](terraform/sbx/state/), [`terraform/dev/state/`](terraform/dev/state/) |
-| Segédscript (oktatói, változatlan) | [`segedscript/3-iac-7-homework.sh`](segedscript/3-iac-7-homework.sh) |
-| Segédscript- és curl-kimenetek | [`kimenetek/`](kimenetek/), és beillesztve a leírás C. függelékébe |
+| Frissített környezetigénylési leírás | [`dokumentacio/kornyezetigenyles.md`](dokumentacio/kornyezetigenyles.md) (4.0) |
+| Terraform futtatása GitHub Actionsből | [`.github/workflows/terraform.yml`](.github/workflows/terraform.yml) |
+| Kubernetesen belüli erőforrások Terraformból (Helm) | [`terraform/ingress.tf`](terraform/ingress.tf), [`external-dns.tf`](terraform/external-dns.tf), [`cert-manager.tf`](terraform/cert-manager.tf), [`demo-app.tf`](terraform/demo-app.tf) |
+| PR → `validate` + `plan` | a workflow `Terraform Plan (<env>)` jobjai és az összesítő `Terraform Plan` ellenőrzés |
+| Ruleset a fő ágon (csak PR, kötelező plan, csak naprakész ág) | [`bootstrap/02-github-repo.sh`](bootstrap/02-github-repo.sh) `ruleset` |
+| Merge → `apply` | a workflow `Terraform Apply (<env>)` jobjai |
+| Környezetek szeparálása | Terraform workspace-ek + [`terraform/environments/`](terraform/environments), workspace-védelem a [`common.tf`](terraform/common.tf)-ben |
+| A pipeline identitása (titok nélkül) | [`bootstrap/01-azure-github-identity.sh`](bootstrap/01-azure-github-identity.sh) |
+| Igénylőlap | [`.github/pull_request_template.md`](.github/pull_request_template.md) |
+| Igénylő pull requestek | a repó *Pull requests* fülén: a `dev` környezet igénylése (merge-ölve) és a `dev` meghosszabbítása (nyitva) |
 
-## Használat
+## A 3. heti visszajelzések alapján változott
 
-Előfeltétel: `az`, `terraform` (≥ 1.4), `kubectl`, `kubelogin`, `helm`, `curl`; `az login`.
+- Mindhárom csoportnak (platform-admins, developers, readers) tagja vagyok, így a jogosultságok működés közben is látszanak.
+- A tagokat `név = "UPN"` térképpel adom meg, az object ID-t a Terraform keresi ki (`data "azuread_user"`).
+- Az Entra ID-csoportok és a tagságok külön fájlba kerültek: [`terraform/entra.tf`](terraform/entra.tf).
+
+## Gyorsindítás
 
 ```bash
-./scripts/sbx-letrehozas.sh
-./scripts/dev-letrehozas.sh
-
-./scripts/sbx-lebontas.sh
-./scripts/dev-lebontas.sh
+az login && ./bootstrap/01-azure-github-identity.sh        # egyszer: a pipeline identitása
+gh auth login && ./bootstrap/02-github-repo.sh secrets     # egyszer: repo secretek
+./bootstrap/02-github-repo.sh default-branch               # egyszer: alapértelmezett ág
+./bootstrap/02-github-repo.sh ruleset                      # egyszer, az első sikeres futás után
 ```
 
-A scriptek a `plan` után megerősítést kérnek; `AUTO_APPROVE=1` esetén nem kérdeznek.
-
-## Felépítés
-
-```
-terraform/<env>/   provider.tf, common.tf, network.tf, aks.tf, dns.tf, outputs.tf, terraform.tfvars, state/
-k8s/               ClusterIssuer, External DNS values-sablon
-scripts/           kozos.sh, kornyezet-letrehozas.sh, kornyezet-lebontas.sh, <env>-letrehozas.sh, <env>-lebontas.sh, kimenetek-beillesztese.sh
-segedscript/       az oktatói segédscript
-kimenetek/         a segédscript és a curl kimenetei
-dokumentacio/      a környezetigénylési leírás és az igénylőlap
-```
+Ezután egy környezet igénylése: ág, `terraform/environments/<env>.tfvars` a sablonból, pull request (lásd a leírás 3. fejezetét).

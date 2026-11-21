@@ -1,15 +1,15 @@
-# Környezetigénylési folyamat – Project X miniplatform (Infrastructure as Code)
+# Környezetigénylési folyamat – Project X miniplatform (pipeline + Terraform)
 
 Ebben a dokumentumban leírom, hogyan működik nálam az új futtatókörnyezetek igénylése és kiszolgálása. Két nézőpontot rögzítek:
 
 1. **A fejlesztői oldal:** mit kell tennie egy fejlesztőnek, ha új környezetet szeretne kapni (3. fejezet).
 2. **Az üzemeltetői oldal:** mit csinálok én platform engineerként, amikor beérkezik egy igénylés (4. fejezet).
 
-A folyamat alapja a `project-x` **sandbox** (`sbx`) és **dev** környezet. Ezeket először kézzel (ClickOps) építettem fel, majd a 3.0-s verzióban **teljes egészében Terraform-kódba ültettem át**. A leírás egyszerre szolgál dokumentációként és futtatókönyvként (runbookként): a 4. fejezet lépései sorban végrehajthatók, és a repóban lévő scriptek pontosan ezeket a lépéseket vezénylik le.
+A folyamat alapja a `project-x` **sandbox** (`sbx`) és **dev** környezet. Ezeket először kézzel (ClickOps) építettem fel, aztán Terraform-kódba ültettem át, a 4.0-s verzióban pedig **a kód már csak GitHub Actions pipeline-ból fut**. Egy környezet igénylése ma egy **pull request**: a fejlesztő leírja a kívánt környezetet, a pipeline megmutatja, mi fog történni, és a merge után létre is hozza.
 
 **Az alap DNS-zónám:** `vighsandor.az.cubix-pe.hu`. Minden környezet ez alá kap saját alzónát.
 
-**A repó:** <https://github.com/vighsandor/cubixplatformeng>, `platformeng-w3` ág, `week3-iac` tag.
+**A repó:** <https://github.com/vighsandor/cubixplatformeng>. A fő ág a `platformeng-w3`, a 4. heti állapot tagje `week4-pipeline-tf`.
 
 ### Változásnapló
 
@@ -17,7 +17,8 @@ A folyamat alapja a `project-x` **sandbox** (`sbx`) és **dev** környezet. Ezek
 |---|---|
 | 1.0 | ClickOps-alapinfrastruktúra: AKS, Traefik, Azure DNS alzóna kézi A rekordokkal, cert-manager, Let's Encrypt |
 | 2.0 | Entra ID-integráció és automatikus DNS: jogosultság csak Entra ID-csoportoknak; External DNS managed identityvel és workload identity federationnel, titok nélkül |
-| **3.0** | **Infrastructure as Code.** Az Azure- és Entra ID-erőforrások (resource groupok, hálózat, AKS, identitások, federated credential, DNS-zóna és delegáció, csoportok, tagságok, szerepkörök) Terraformból jönnek létre, környezetenként külön kódkönyvtárban és külön state-tel (4.2–4.4). A Kubernetesen belüli komponensek ezen a szinten még szándékosan kézi, Helm-es lépések maradnak (4.6). A létrehozást és a lebontást scriptek vezénylik le (4.3, 4.10). A portálos ClickOps-lépések kikerültek a futtatókönyvből. |
+| 3.0 | Infrastructure as Code: az Azure- és Entra ID-erőforrások Terraformból, környezetenként külön kódkönyvtárban és state-tel; a Kubernetesen belüli rész még kézi Helm |
+| **4.0** | **Pipeline és teljes IaC.** A Terraform GitHub Actionsből fut (pull requestre `fmt` + `validate` + `plan`, a fő ágra merge után `apply`), a GitHub titok nélkül, workload identity federationnel jelentkezik be az Azure-ba. A fő ágat ruleset védi. **A környezetigénylés egy pull request** (3. fejezet). A Kubernetesen belüli komponenseket (Traefik, External DNS, cert-manager, ClusterIssuer, demóalkalmazás) is a Terraform telepíti. Egy kód, több környezet: **Terraform workspace-ek** és környezetenkénti `tfvars`, workspace-védelemmel. Az Entra ID-csoportok külön fájlba kerültek, a tagokat név és UPN alapján adom meg (a Terraform keresi ki az object ID-t), és magam is tagja vagyok minden csoportnak, hogy a jogosultságok működés közben is látszódjanak. |
 
 **A dokumentumban használt változók:**
 
@@ -44,8 +45,9 @@ Minden igényelt környezet egy **önálló, minimális, de teljes értékű AKS
 | HTTP(S) belépési pont | Traefik ingress controller Azure Load Balancerrel; minden HTTP kérést HTTPS-re irányít át |
 | Névfeloldás | Saját Azure DNS alzóna: `<projekt>.<env>.vighsandor.az.cubix-pe.hu`. A rekordokat az External DNS automatikusan létrehozza az Ingress-erőforrások alapján. |
 | TLS-tanúsítvány | cert-manager, Let's Encrypt `ClusterIssuer` (`letsencrypt`) |
-| Gépi identitás | Workload identity federation: a clusterben futó platformkomponensek titkos kulcs nélkül, managed identityvel érik el az Azure-t |
-| Reprodukálhatóság | Minden környezet ugyanabból a Terraform-kódból, verziókezelten jön létre; két környezet között csak a `terraform.tfvars` és a state helye különbözik |
+| Gépi identitás | Workload identity federation: a clusterben futó platformkomponensek és a pipeline is titkos kulcs nélkül, managed identityvel érik el az Azure-t |
+| Önkiszolgálás | Környezetet pull requesttel lehet igényelni; a pipeline a merge után emberi kattintgatás nélkül felépíti |
+| Reprodukálhatóság | Minden környezet ugyanabból a Terraform-kódból jön létre; két környezet között csak a `tfvars` fájl és a workspace különbözik |
 
 Az eredmény: a fejlesztő egyetlen Ingress-erőforrással **névvel elérhető, TLS-sel védett** végpontot kap, emberi beavatkozás nélkül.
 
@@ -56,13 +58,13 @@ Az eredmény: a fejlesztő egyetlen Ingress-erőforrással **névvel elérhető,
 | Régió | Sweden Central | Itt van biztosított kvótám, és minden környezet egy helyen fut. |
 | Méret | 1 node, `Standard_D2as_v5` (2 vCPU, 8 GiB RAM) | A kvóta szűkös: a Standard DASv5 családra 4 vCPU, a régióra összesen 8 vCPU jut. Nagyobb gépet csak indoklással adok. |
 | Frissítés | Az automatikus frissítés ki van kapcsolva | Rövid életű, eltakarítandó környezetekről van szó; a verziót én tartom kézben (Terraform-változó). |
-| **Infrastruktúra-változtatás** | **Csak kódból, `terraform plan` + `apply` útján; a portálon kézzel nem módosítok** | A kód az egyetlen igazságforrás. Egy kézi módosítás eltérést (driftet) okoz, amelyet a következő `apply` visszaír, vagy ami rosszabb, összeakad vele. A `plan` minden változtatás előtt megmutatja, mi fog történni. |
-| Jogosultság | Jogot csak Entra ID-csoport kap, személy soha | Csoportokkal a jogosultságkezelés skálázható és követhető. Ha valaki elhagyja a projektet, elég kivenni a csoportból. |
-| Gépi hozzáférés | Titkos kulcsot nem használok; a gépi identitás managed identity, federated credentiallel | A lejáró, kézzel forgatandó titkok kezelése hibalehetőség és biztonsági kockázat. |
+| **Változtatás** | **Minden változás pull requesten keresztül megy, és csak a pipeline módosítja az infrastruktúrát** | A fő ágra közvetlenül senki nem pusholhat (én sem). Minden változáshoz tartozik egy plan, egy review és egy futási napló: visszakövethető, ki, mit, mikor és miért változtatott (auditálhatóság). A portálon kézzel nem módosítok, mert az driftet okoz. |
+| Jogosultság | Jogot csak Entra ID-csoport kap, személy soha | Csoportokkal a jogosultságkezelés skálázható és követhető. Ha valaki elhagyja a projektet, elég kivenni a csoportból (egy sor törlése a `tfvars`-ból). |
+| Gépi hozzáférés | Titkos kulcsot nem használok; a gépi identitás managed identity, federated credentiallel | A lejáró, kézzel forgatandó titkok kezelése hibalehetőség és biztonsági kockázat. A GitHub repóban nincs Azure-jelszó, csak azonosítók. |
 | Legkisebb jogosultság | Az External DNS identitása csak *DNS Zone Contributor* szerepkört kap, és csak a saját környezete alzónáján | Ha egy környezet komponense kompromittálódik, más környezet DNS-éhez akkor sem fér hozzá. |
 | DNS | A hosztnevek automatikusan jönnek létre, de csak a környezet saját alzónáján belül | Az External DNS `domainFilters` beállítása a zónán kívüli hosztneveket figyelmen kívül hagyja. |
 | TLS | Let's Encrypt **staging** végpont | Az éles Let's Encrypt ugyanarra a névre nagyjából heti 5 tanúsítványt ad ki; a stagingnél ez a korlát jóval magasabb, így szabadon lehet újraépíteni. Ára, hogy a böngésző „nem biztonságos” figyelmeztetést ad. |
-| Élettartam | A lejárati dátum után megszüntetem a környezetet, ha nem kérik a meghosszabbítását | A nem használt infrastruktúra pénzbe kerül és foglalja a kvótát. Terraformmal a teljes lebontás és az újraépítés is egyetlen parancs. |
+| Élettartam | A lejárati dátum után megszüntetem a környezetet, ha nem kérik a meghosszabbítását | A nem használt infrastruktúra pénzbe kerül és foglalja a kvótát. A lebontás egy kézzel indítható pipeline (4.8). |
 
 ---
 
@@ -70,42 +72,52 @@ Az eredmény: a fejlesztő egyetlen Ingress-erőforrással **névvel elérhető,
 
 Minden erőforrás nevébe beleteszem a **projekt** és a **környezet** jelét, a komponensek nevében pedig a **komponens** nevét is. A Terraform-kódban ezt egyetlen származtatott érték biztosítja: `local.resource_basename = "${var.project_name}-${var.env_name}"`. A nevek így nem gépelhetők el, és két környezet nem ütközhet.
 
-### 2.1 Azure-erőforrások
+### 2.1 Azure-erőforrások (környezetenként)
 
 | Erőforrás | Minta | `sbx` | `dev` | Terraform-erőforrás |
 |---|---|---|---|---|
 | Resource group (AKS) | `<projekt>-<env>-aks` | `project-x-sbx-aks` | `project-x-dev-aks` | `azurerm_resource_group.aks` |
 | AKS cluster | `<projekt>-<env>` | `project-x-sbx` | `project-x-dev` | `azurerm_kubernetes_cluster.aks` |
 | Infrastruktúra (node) resource group | `<projekt>-<env>-aks-nodes` | `project-x-sbx-aks-nodes` | `project-x-dev-aks-nodes` | (az AKS hozza létre) |
-| Virtuális hálózat | `<projekt>-<env>-network` | `10.224.0.0/12` | `10.224.0.0/12` | `azurerm_virtual_network.aks` |
-| Alhálózat (node-ok) | `<projekt>-<env>-aks-nodes` | `10.224.0.0/24` | `10.224.0.0/24` | `azurerm_subnet.aks_nodes` |
+| Virtuális hálózat | `<projekt>-<env>-network` | `10.224.0.0/12` | `10.240.0.0/12` | `azurerm_virtual_network.aks` |
+| Alhálózat (node-ok) | `<projekt>-<env>-aks-nodes` | `10.224.0.0/24` | `10.240.0.0/24` | `azurerm_subnet.aks_nodes` |
 | Managed identity (AKS) | `<projekt>-<env>-aks` | `project-x-sbx-aks` | `project-x-dev-aks` | `azurerm_user_assigned_identity.aks` |
 | Managed identity (External DNS) | `<projekt>-<env>-externaldns` | `project-x-sbx-externaldns` | `project-x-dev-externaldns` | `azurerm_user_assigned_identity.external_dns` |
 | Federated credential (External DNS) | `external-dns` | `external-dns` | `external-dns` | `azurerm_federated_identity_credential.external_dns` |
-| AKS DNS name prefix | `<projekt>-<env>-dns` | `project-x-sbx-dns` | `project-x-dev-dns` | (az AKS argumentuma) |
 | Resource group (DNS) | `<projekt>-<env>-dns` | `project-x-sbx-dns` | `project-x-dev-dns` | `azurerm_resource_group.dns` |
 | DNS alzóna | `<projekt>.<env>.vighsandor.az.cubix-pe.hu` | `project-x.sbx.…` | `project-x.dev.…` | `azurerm_dns_zone.env` |
 | NS-delegáció a szülőzónában | `<projekt>.<env>` | `project-x.sbx` | `project-x.dev` | `azurerm_dns_ns_record.delegation` |
-| Terraform state (blob) | `<projekt>-<env>.tfstate` | `project-x-sbx.tfstate` | `project-x-dev.tfstate` | (backend) |
+| Terraform workspace | `<env>` | `sbx` | `dev` | – |
+| Terraform state (blob) | `<projekt>.tfstateenv:<env>` | `project-x.tfstateenv:sbx` | `project-x.tfstateenv:dev` | (backend, workspace-enként) |
+| Bemenetek | `terraform/environments/<env>.tfvars` | `sbx.tfvars` | `dev.tfvars` | – |
 
-### 2.2 Entra ID-csoportok
+### 2.2 Közös, egyszer létrehozott erőforrások (`course-baseline`)
 
-| Csoport | Minta | Tagok | Szerepkörök a clusteren |
+| Erőforrás | Név | Szerep |
+|---|---|---|
+| DNS-zóna | `vighsandor.az.cubix-pe.hu` | a szülőzóna; a környezetek ide delegálnak |
+| Storage account + container | `platencbvighsandor` / `tfstate` | a Terraform state |
+| Managed identity | `github-repos` | **a pipeline identitása** (4.2) |
+
+### 2.3 Entra ID-csoportok (környezetenként, `entra.tf`)
+
+| Csoport | Minta | Tagok (`tfvars`) | Szerepkörök a clusteren |
 |---|---|---|---|
-| Platformadminok | `<projekt>-<env>-platform-admins` | a Terraformot futtató identitás (én) + `additional_platform_admin_object_ids` | Azure Kubernetes Service **RBAC Cluster Admin**, **Cluster User Role** |
-| Fejlesztők (írás) | `<projekt>-<env>-developers` | `developer_object_ids` (igénylőlap 5. pont) | Azure Kubernetes Service **RBAC Writer**, **Cluster User Role** |
-| Olvasók | `<projekt>-<env>-readers` (csak ha van tagja) | `reader_object_ids` (igénylőlap 5. pont) | Azure Kubernetes Service **RBAC Reader**, **Cluster User Role** |
+| Platformadminok | `<projekt>-<env>-platform-admins` | `platform_admins` (én) + `platform_admin_service_principals` (a pipeline: `github-repos`) | Azure Kubernetes Service **RBAC Cluster Admin**, **Cluster User Role** |
+| Fejlesztők (írás) | `<projekt>-<env>-developers` | `developers` | Azure Kubernetes Service **RBAC Writer**, **Cluster User Role** |
+| Olvasók | `<projekt>-<env>-readers` | `readers` | Azure Kubernetes Service **RBAC Reader**, **Cluster User Role** |
 
-A csoportok **Security** típusúak; a tagságot a Terraform kezeli (`azuread_group_member`).
+A tagokat **név → UPN** párokkal adom meg (pl. `vighsandor = "…@….onmicrosoft.com"`), az object ID-t a Terraform keresi ki (`data "azuread_user"`). A plan így ember által olvasható nevet mutat (`azuread_group_member.env["developers/vighsandor"]`), és a `tfvars` önmagában is dokumentálja, ki milyen jogot kapott. Magam mindhárom csoportnak tagja vagyok, hogy a jogosultságok működését (írás, olvasás) a saját fiókommal is ellenőrizni tudjam.
 
-### 2.3 Kubernetes-objektumok
+### 2.4 Kubernetes-objektumok (Terraform `helm_release`-ek)
 
-| Objektum | Név |
-|---|---|
-| Namespace-ek (platform) | `ingress-controller`, `cert-manager`, `external-dns` |
-| Namespace (alkalmazás) | `<app>` |
-| External DNS service account | `external-dns` (az `external-dns` namespace-ben) |
-| External DNS TXT owner ID | az alzóna neve, a pontok kötőjelre cserélve (Terraform-kimenet: `external_dns_txt_owner_id`) |
+| Komponens | Namespace | Helm release | Chart (verzió) |
+|---|---|---|---|
+| Ingress controller | `ingress-controller` | `traefik` | `traefik` (41.2.0) |
+| DNS-automatizmus | `external-dns` | `external-dns` | `external-dns` (1.20.0) |
+| Tanúsítványkezelés | `cert-manager` | `cert-manager` | `cert-manager` (v1.19.4) |
+| Let's Encrypt ClusterIssuer | `cert-manager` | `cluster-issuer` | `bedag/raw` (2.0.2) |
+| Demóalkalmazás | `colors` | `colors` | `oci://docker.io/ecklm/colors-demo-app` |
 
 **Hálózati tervezés:** minden környezet saját, át nem fedő `/12` VNet-tartományt kap, hogy egy későbbi peering ne igényeljen újraépítést. A Kubernetes service-tartomány (`10.0.0.0/16`, DNS IP: `10.0.0.10`) clusteren belüli, ezért minden környezetben ugyanaz.
 
@@ -113,47 +125,75 @@ A csoportok **Security** típusúak; a tagságot a Terraform kezeli (`azuread_gr
 
 ## 3. Fejlesztői folyamat: hogyan igényelj környezetet?
 
-Ez a fejezet a fejlesztőknek szól. Leírom, mit kérek tőled, és mit kapsz tőlem cserébe. A 3.0-s verzióban a te oldaladon **nem változott semmi**: az, hogy a környezetet kódból építem fel, számodra annyit jelent, hogy gyorsabban és mindig ugyanúgy kapod meg.
+Ez a fejezet a fejlesztőknek szól. A 4.0-s verziótól **a környezetigénylés egy pull request** a platform repójába. Ennek három előnye van: az igénylés és a megvalósítás ugyanaz a dokumentum; a pipeline már az igényléskor megmutatja, mi fog létrejönni; és minden igénylés, módosítás és jóváhagyás visszakereshető a git-történetben.
 
 ### 3.1 A folyamat áttekintése
 
 ```
-Fejlesztő (te)                          Platform engineer (én)
-──────────────                          ──────────────────────
-1. Kitöltöd az igénylőlapot      ──►    2. Befogadom és ellenőrzöm az igénylést
-                                        3. Felveszem a környezetet a kódba,
-                                           és Terraformmal felépítem
-                                        4. Ellenőrzöm, majd átadom
-5. Megkapod az átadó üzenetet    ◄──
+Fejlesztő (te)                                   Platform engineer (én)
+──────────────                                   ──────────────────────
+1. Ágat nyitsz, felveszed a környezet
+   tfvars fájlját, pull requestet nyitsz  ──►
+                                                 2. A pipeline automatikusan lefut:
+                                                    fmt + validate + plan minden környezetre
+                                                 3. Átnézem a PR-t és a plan-t,
+                                                    szükség esetén kiegészítem (hálózat)
+                                                 4. Merge -> a pipeline apply-ja felépíti
+5. Megkapod az átadó üzenetet             ◄──
 6. Csatlakozol, telepíted az alkalmazásod
    (a DNS-név és a TLS-tanúsítvány automatikusan elkészül)
-7. Lejárat előtt jelzel: meghosszabbítás vagy megszüntetés
+7. Módosítás, meghosszabbítás, megszüntetés: újabb pull request
 ```
 
 ### 3.2 1. lépés: készülj fel
 
-1. Ellenőrizd, hogy van **Entra ID-fiókod** a céges tenantban. A clusterbe ezzel fogsz belépni, és ezzel veszlek fel a projekt csoportjába.
-2. Telepítsd a szükséges eszközöket: `az` (Azure CLI), `kubectl`, `kubelogin` (Azure kubelogin plugin), `helm`. A `k9s` nem kötelező, de kényelmes.
-3. Döntsd el előre:
-   - a **projekt azonosítóját**: rövid, kisbetűs, kötőjeles, például `project-x`;
-   - a **környezet típusát**: `sbx` kísérletezésre, `dev` közös fejlesztésre;
+1. Legyen **Entra ID-fiókod** a céges tenantban, és tudd a **UPN**-edet (userPrincipalName). Ezzel lépsz be a clusterbe, és ezzel veszlek fel a környezet csoportjaiba. A UPN-t így kérdezheted le: `az ad signed-in-user show --query userPrincipalName -o tsv`.
+2. Legyen **GitHub-fiókod**, és olvasási jogod a `vighsandor/cubixplatformeng` repóhoz. Ha nincs, kérd tőlem.
+3. Telepítsd a szükséges eszközöket: `git`, `az` (Azure CLI), `kubectl`, `kubelogin`, `helm`.
+4. Döntsd el előre:
+   - a **projekt azonosítóját** (rövid, kisbetűs, kötőjeles, például `project-x`);
+   - a **környezet nevét**: `sbx` kísérletezésre, `dev` közös fejlesztésre, `test` tesztelésre;
    - **kiknek** kell hozzáférés, és milyen szinten (írás vagy olvasás);
    - **meddig** lesz szükséged a környezetre.
 
-### 3.3 2. lépés: küldd be az igénylést
+### 3.3 2. lépés: nyiss pull requestet
 
-Az igényléshez egy Markdown-formátumú igénylőlapot használok. Így az igénylés verziókezelhető, géppel is jól feldolgozható, és nem kell hozzá külső eszköz.
+1. Klónozd a repót, és nyiss egy ágat az igénylésnek:
 
-1. Másold le az **igénylőlap sablonját** az [A. függelékből](#a-függelék--környezetigénylő-lap-markdown-sablon) egy új fájlba, ezen a néven: `igenyles-<projekt>-<env>.md`.
-2. Töltsd ki a mezőket: a `<…>` helyekre írd be az értéket, a választós kérdéseknél pedig jelöld be a megfelelő négyzetet (`- [x]`).
-3. Küldd el nekem a kitöltött fájlt e-mailben vagy a csapat csatornáján.
+   ```bash
+   git clone https://github.com/vighsandor/cubixplatformeng.git && cd cubixplatformeng
+   git switch platformeng-w3 && git pull
+   git switch -c igenyles/<projekt>-<env>
+   ```
 
-> **Hosztnevet nem kell előre igényelned.** A DNS-rekordok automatikusan jönnek létre abból a hosztnévből, amelyet az Ingress-erőforrásodban megadsz (lásd 3.6).
+2. Másold le a sablont a környezet nevére, és töltsd ki ([B. függelék](#b-függelék--a-környezet-tfvars-sablonja)):
 
-### 3.4 3. lépés: várd meg a visszajelzésemet
+   ```bash
+   cp terraform/environments/_sablon.tfvars.example terraform/environments/<env>.tfvars
+   ```
 
-1. **2 munkanapon belül** visszajelzek: vagy jóváhagyom az igénylést, vagy kérdezek.
-2. A jóváhagyás után felépítem a környezetet, felveszlek a megfelelő Entra ID-csoportba, és **átadó üzenetet** küldök a cluster adataival, a DNS-zónával, a csoport nevével, a csatlakozás parancsaival és egy működő demóalkalmazás URL-jével.
+   - `project_name`, `env_name` (egyezzen a fájl nevével), `expires`;
+   - `developers` (írás) és `readers` (olvasás): `név = "UPN"` soronként;
+   - a hálózati tartományt (`vnet_address_space`, `node_subnet_prefix`) hagyd a sablon szerint, azt én töltöm ki.
+
+3. Commitold és pushold, majd nyiss pull requestet a **`platformeng-w3`** ágra:
+
+   ```bash
+   git add terraform/environments/<env>.tfvars
+   git commit -m "Környezetigénylés: <projekt> <env>"
+   git push -u origin igenyles/<projekt>-<env>
+   ```
+
+   A GitHubon a **Compare & pull request** gombbal nyithatod meg. A pull request leírása automatikusan az **igénylőlap**, ezt töltsd ki ([A. függelék](#a-függelék--az-igénylőlap-pull-request-sablon)).
+
+   > Ha nincs írási jogod a repóhoz, forkold, és onnan nyiss pull requestet; vagy küldd el nekem a kitöltött `tfvars` fájlt és az igénylőlapot, és én nyitom meg a pull requestet helyetted.
+
+### 3.4 3. lépés: kövesd a pull requestet
+
+1. A pull requesten azonnal elindul a **Terraform** pipeline. Környezetenként lefut egy `Terraform Plan (<env>)` job, a pull request alján pedig a `Terraform Plan` ellenőrzés mutatja az összesített eredményt.
+2. A job összefoglalójában (*Actions* → a futás → *Summary*) látod, mit hozna létre a plan a környezetedhez. Új környezetnél ez körülbelül 35 létrehozandó erőforrás, a többi környezetnél pedig `No changes`.
+3. **2 munkanapon belül** átnézem: ha kell, kiegészítem (hálózati tartomány), kérdezek, vagy jóváhagyom.
+4. A merge után a pipeline `Terraform Apply (<env>)` jobja felépíti a környezetet (kb. 10–15 perc). A végén **átadó üzenetet** küldök a csatlakozás adataival; ugyanezek a futás összefoglalójában (`terraform output`) is ott vannak.
 
 ### 3.5 4. lépés: csatlakozz a clusterhez
 
@@ -167,341 +207,295 @@ kubectl get nodes
 
 **Sikeres, ha** a `kubectl get nodes` kiír egy node-ot `Ready` állapotban.
 
-> Ha 403 / Forbidden hibát kapsz, pedig az átadó üzenet szerint már tagja vagy a csoportnak, jelentkezz ki és be újra (`az logout`, majd `az login`). A csoporttagság átvezetése néhány percig is tarthat.
+> Ha 403 / Forbidden hibát kapsz, jelentkezz ki és be újra (`az logout`, majd `az login`). A csoporttagság átvezetése néhány percig is tarthat.
 
 ### 3.6 5. lépés: telepítsd az alkalmazásod
 
 Az alkalmazás Ingress-erőforrásán két dolgot kell beállítanod:
 
-1. A **host** a környezeted alzónáján belül legyen: `<app>.<projekt>.<env>.vighsandor.az.cubix-pe.hu`. Az `<app>` előtagot te választod.
+1. A **host** a környezeted alzónáján belül legyen: `<app>.<projekt>.<env>.vighsandor.az.cubix-pe.hu`.
 2. Az Ingress kapja meg a **`cert-manager.io/cluster-issuer: letsencrypt`** annotációt.
 
 ```bash
-helm upgrade --install \
-    --namespace=<app> --create-namespace \
-    <app> \
-    <chart-referencia> \
+helm upgrade --install --namespace=<app> --create-namespace <app> <chart-referencia> \
     --set ingress.host=<app>.<projekt>.<env>.vighsandor.az.cubix-pe.hu \
     --set ingress.annotations."cert-manager\.io/cluster-issuer"=letsencrypt
 ```
 
-Ezután automatikusan: az **External DNS** 1–2 percen belül létrehozza az A rekordot (és a hozzá tartozó TXT rekordot), a **cert-manager** tanúsítványt kér, és néhány perc múlva az alkalmazás elérhető a `https://<app>.<projekt>.<env>.vighsandor.az.cubix-pe.hu` címen.
+Ezután automatikusan: az **External DNS** 1–2 percen belül létrehozza az A rekordot, a **cert-manager** tanúsítványt kér, és néhány perc múlva az alkalmazás elérhető a `https://<app>.<projekt>.<env>.vighsandor.az.cubix-pe.hu` címen.
 
 > - **Zónán kívüli hosztnév nem működik:** az External DNS figyelmen kívül hagyja.
-> - **Az Ingress törlésekor a DNS-rekord is törlődik**, így nem maradnak árva rekordok.
-> - Az `ingress-controller`, a `cert-manager` és az `external-dns` namespace a platform része; kérlek, **ne módosítsd őket**.
+> - **Az Ingress törlésekor a DNS-rekord is törlődik.**
+> - Az `ingress-controller`, `external-dns` és `cert-manager` namespace a platform része, és a Terraform kezeli: ha módosítod, a következő pipeline-futás visszaírja.
 
 ### 3.7 Módosítás, meghosszabbítás, megszüntetés
 
-- **Új hosztnév kell?** Nem kell igényelned, csak hozz létre hozzá Ingresst.
-- **Új csapattag, kilépő tag, más méret?** Küldj igénylést „Módosítás” típussal. A változást a kódban vezetem át (4.9), így az is nyomon követhető, ki és mikor kapott jogot.
-- **Meghosszabbítás:** a lejárat előtt legalább 3 munkanappal jelezd.
-- **Már nincs rá szükség?** Szólj, és előbb lebontom.
+Mindegyik ugyanúgy megy, mint az igénylés: egy pull request a környezeted `tfvars` fájljára.
+
+| Igény | Mit módosítasz a `terraform/environments/<env>.tfvars`-ban |
+|---|---|
+| Új csapattag / kilépő tag | sor hozzáadása / törlése a `developers` vagy `readers` térképben |
+| Meghosszabbítás | `expires` |
+| Más méret | `node_vm_size`, `node_count` (indoklással a PR-ban) |
+| Megszüntetés | jelezd a PR-ban „Megszüntetés” típussal; a lebontást én végzem (4.8) |
+
+Új hosztnévhez nem kell pull request: elég egy Ingress (3.6).
 
 ---
 
-## 4. Üzemeltetői folyamat: így építem fel a környezetet (Terraform)
+## 4. Üzemeltetői folyamat: pipeline és Terraform
 
 Ez a fejezet az én futtatókönyvem. Minden lépésnél leírom, mit csinálok, milyen eredményt várok, és miért így döntöttem.
 
-### 4.0 Miért Terraform, és mit tanultam az átültetésből?
+### 4.0 Miért pipeline, és mire figyelek vele?
 
-**Deklaratív vs. imperatív.** A ClickOps és a parancssoros scriptek (`az ... create`) imperatívak: lépéseket írnak le, és a végeredmény attól függ, honnan indultunk. A Terraform deklaratív: a kód a **kívánt állapotot** írja le. A Terraform ezt összeveti a saját nyilvántartásával (**state**), és a `plan` megmutatja, mit kell létrehozni, módosítani vagy törölni, hogy a valóság a kódnak megfeleljen. Az `apply` ezt hajtja végre. Ugyanaz a kód többször lefuttatva sem csinál semmit, ha nincs eltérés.
+**Amit nyerek vele (CI/CD):**
 
-**Mit nyerek vele a ClickOps-hoz és a scriptekhez képest?**
+- **Automatizáció:** a `plan` és az `apply` nem az én gépemen, nem az én emlékezetemből fut, hanem minden alkalommal ugyanazokkal a lépésekkel.
+- **Egységes futtatókörnyezet:** a pipeline mindig tiszta, azonos környezetben fut (eszközverziók, bejelentkezés). A „nálam működik” hibák eltűnnek.
+- **Auditálhatóság:** minden infrastruktúra-változáshoz tartozik egy pull request (ki kérte, miért), egy plan (mi fog történni), egy review (ki hagyta jóvá) és egy futási napló (mi történt).
+- **Szabályok kikényszerítése:** a ruleset miatt a fő ágra csak olyan változás kerülhet, amelynek a plan-je lefutott; így hibás kódot nem lehet „véletlenül” élesíteni.
 
-- **Az állapotok összehasonlíthatók és verziózhatók.** Az imperatív scriptnél csak a lépéseket tudom verziózni. Itt magát az infrastruktúrát: a gitben egy diff azt mutatja, hogy januárban még `Standard_D2as_v5` volt a node-méret, februárban már más.
-- **A konfigurációs drift felderíthető.** Drift az, amikor a valós állapot egy ponton még megegyezett a kívánttal, de utána eltért tőle, mert valaki kézzel módosított, vagy a platform maga változott. Mivel a kívánt állapot le van írva, a `plan` megmutatja az eltérést. Imperatív eszközökkel ez nem, vagy csak nagy nehezen oldható meg.
-- **A változtatás a kívánt állapot átírása.** Az Azure CLI-vel egy átnevezéshez nekem kellene kiadnom a törlést és az új létrehozását; ha csak az újat hozom létre, a régi szemétként ott marad. Terraformban csak a nevet írom át, a `plan` pedig jelzi, hogy az erőforrás cserére kerül (*must be replaced*). Ezt a jelzést mindig komolyan veszem: az AKS sok argumentuma (pl. a `network_profile` vagy a `node_resource_group`) csak újraépítéssel módosítható.
+**Amire figyelnem kell (a pipeline imperatív eszköz):**
 
-**Ahol az imperatív eszköz a jobb választás.** A hibakeresés (naplók, események: `kubectl logs`, `az ... show`) és az egyszeri migrációs lépések, ahol a deklaratív eszköz a régi erőforrást az adataival együtt törölné. Ezeket továbbra is kézzel, imperatívan végzem. A Kubernetesen belüli rész ezen a szinten Helmmel megy, amely legalább a release-ek szintjén összehasonlítja a kívánt és a meglévő állapotot. Ezt később egy Kubernetes-natív deklaratív eszköz (Argo CD) veszi át.
+- **A Terraform csak akkor fut, amikor kérjük.** A pipeline nem figyeli folyamatosan a valóságot, ezért nincs automatikus drift-felderítés: egy kézi portálos módosítás csak a következő plan-nél derül ki. Ezért a portálon nem módosítok, és ha driftre gyanakszom, kézzel indítok egy plan-t (*Actions* → *Terraform* → *Run workflow*).
+- **Minden műveletre (plan, apply, destroy) nekem kell felkészítenem a pipeline-t**, és a hibakezelés (újrapróbálás, zárolás) is az én dolgom. Ezért külön workflow-ja van a lebontásnak, és a plan/apply vár a state-zárolásra (`-lock-timeout`).
+- A „folyamatosan figyelő” Terraform-funkciók (drift detection, automatikus újrapróbálás) fizetős termékben (Terraform Cloud) vannak. Ezeket a Kubernetesen belül később egy deklaratív, folyamatosan egyeztető eszköz (Argo CD) adja majd.
 
-**A portál sokat elrejt.** Az átültetés legfontosabb tanulsága: a portál menet közben, a háttérben számos erőforrást létrehozott helyettem, amit Terraformban nekem kell kifejezetten leírnom:
+### 4.1 Architektúra
 
-| Amit a portál „magától” csinált | Terraformban |
-|---|---|
-| *Create new* resource group, VNet, subnet, managed identity | külön `azurerm_resource_group`, `azurerm_virtual_network`, `azurerm_subnet`, `azurerm_user_assigned_identity` |
-| *Network Contributor* jog a cluster identitásának az alhálózaton | `azurerm_role_assignment` (a clusternek **függenie kell** tőle: `depends_on`) |
-| *„Child of an existing zone”* → NS-delegáció a szülőzónában | `azurerm_dns_ns_record` a szülőzónában, az alzóna névszervereivel |
-| Csoport létrehozása tagokkal | `azuread_group` + `azuread_group_member` |
+```
+ fejlesztő / én                  GitHub (vighsandor/cubixplatformeng)               Azure
+ ───────────────                 ───────────────────────────────────               ─────
+ ág + pull request  ──►  ruleset a platformeng-w3 ágon
+                         (PR kötelező, "Terraform Plan" zöld,
+                          az ág naprakész)
+                         │
+                         ├─ pull_request ─► Terraform Plan (env) ×N ──OIDC──►  github-repos
+                         │                  fmt, init, workspace,           managed identity
+                         │                  validate, plan -> artifact      (course-baseline)
+                         │                                                   │
+                         └─ merge (push) ─► Terraform Plan (env) ×N          ├─ Owner az előfizetésen
+                                            Terraform Apply (env) ×N ──────► ├─ Blob Data Contributor a state-en
+                                            (pontosan a plan-t alkalmazza)   ├─ Groups Administrator (Entra)
+                                                                             ├─ Directory Readers (Entra)
+                                                                             └─ platform-admins tag -> AKS cluster-admin
+                                                                                (a Helm-telepítésekhez)
+```
 
-**A sorrendet a Terraform számolja ki.** A portálon lineárisan, lépésről lépésre haladtam. Terraformban az erőforrások közötti hivatkozásokból (pl. a federated credential az AKS `oidc_issuer_url`-jére hivatkozik) a Terraform maga építi fel a függőségi gráfot, és párhuzamosít, ahol lehet.
-
-**A kód szervezése.** A fájlokat a **funkció** szerint bontom, nem típus szerint: ami a DNS-hez kell (a zóna, a delegáció, az External DNS identitása és szerepköre), az a `dns.tf`-ben van. Így egy funkció változtatásakor egy helyen kell dolgoznom. A Terraformnak mindegy, a fájlhatár az embernek szól.
-
-### 4.1 Előfeltételek
-
-1. Telepített eszközök: `az`, `terraform` (≥ 1.4), `kubectl`, `kubelogin`, `helm`, `curl`.
-2. Bejelentkezés: `az login`. A Terraform providerek az Azure CLI bejelentkezését használják, és a `provider.tf`-ben rögzített előfizetésben és tenantban dolgoznak, függetlenül attól, hogy az `az` éppen melyik előfizetésre mutat.
-3. **Terraform state backend.** A state nem a gépemen, hanem Azure Storage-ban él, hogy perzisztens legyen, és később egy pipeline is ugyanazt használhassa:
-
-   | Elem | Érték |
-   |---|---|
-   | Resource group | `course-baseline` (a kurzus elején, kézzel; ezt a kód nem kezeli) |
-   | Storage account | `platencbvighsandor` (swedencentral, Standard_LRS; a név globálisan egyedi). Az oktató a westeuropet használta, de az az előfizetésemben új ügyfelet nem fogad (*RequestDisallowedByAzure*), ezért a többi erőforrással azonos régiót választottam. |
-   | Container | `tfstate` |
-   | Blob (kulcs) | `<projekt>-<env>.tfstate` (környezetenként külön) |
-   | Jogosultság | **Storage Blob Data Contributor** a storage accounton (a saját felhasználómnak) |
-
-   > Az *Owner* szerepkör nem elég: az Azure-ban az adat-jogosultságok (data actions) elválnak az adminisztratív jogoktól, ezért a blobok olvasásához-írásához külön *Storage Blob Data Contributor* kell. A létrehozó script ellenőrzi, és ha hiányzik, pótolja a storage accountot, a containert és a szerepkört.
-
-4. A `vighsandor.az.cubix-pe.hu` szülőzóna megvan a `course-baseline` resource groupban. A kód ezt csak olvassa (`data "azurerm_dns_zone"`), soha nem módosítja, kivéve a saját NS-delegációs rekordját.
-5. **Nincs ütköző, kézzel létrehozott erőforrás.** Ha egy erőforrás már létezik (pl. egy korábbi ClickOps-csoport az Entra ID-ban), a Terraform nem veszi át, hanem hibát ad. Az Entra ID-objektumok nem a resource groupokban élnek, ezért a portálos takarításnál ezekre külön figyelni kell.
-
-### 4.2 A kód felépítése
+**A repó felépítése:**
 
 ```
 .
-├── terraform/
-│   ├── sbx/                     # a sandbox kódja és state-pillanatképe
-│   │   ├── provider.tf          # Terraform, backend (state helye), providerek
-│   │   ├── common.tf            # közös változók, locals (nevek, tagek), client config
-│   │   ├── network.tf           # VNet, alhálózat, Network Contributor a clusternek
-│   │   ├── aks.tf               # RG, cluster-identitás, AKS, Entra ID-csoportok, tagságok, RBAC
-│   │   ├── dns.tf               # alzóna, NS-delegáció, External DNS identitás + federáció + jog
-│   │   ├── outputs.tf           # a K8s-lépésekhez és az átadáshoz szükséges értékek
-│   │   ├── terraform.tfvars     # a környezet egyedi értékei
-│   │   ├── .terraform.lock.hcl  # rögzített providerverziók
-│   │   └── state/               # state-pillanatkép a beadandóhoz
-│   └── dev/                     # ugyanez a dev környezetre
-├── k8s/                         # ClusterIssuer, External DNS values-sablon
-├── scripts/                     # létrehozó, lebontó és segédscriptek
-├── segedscript/                 # az oktatói segédscript (változatlanul)
-├── kimenetek/                   # a segédscript- és curl-kimenetek
-└── dokumentacio/                # ez a dokumentum és az igénylőlap
+├── .github/
+│   ├── workflows/terraform.yml          # plan pull requestre, apply a fő ágra
+│   ├── workflows/terraform-destroy.yml  # egy környezet lebontása kézi indítással
+│   └── pull_request_template.md         # az igénylőlap (A. függelék)
+├── terraform/                           # EGY kód minden környezetre
+│   ├── provider.tf      # backend (state), providerek: azurerm, azuread, helm, time
+│   ├── common.tf        # közös változók, nevek, tagek, workspace-védelem
+│   ├── network.tf       # VNet, alhálózat
+│   ├── aks.tf           # AKS, a cluster identitása, a csoportok jogai, RBAC-várakozás
+│   ├── entra.tf         # Entra ID-csoportok és tagjaik (név -> UPN -> object ID)
+│   ├── dns.tf           # alzóna, NS-delegáció
+│   ├── external-dns.tf  # External DNS: identitás, federáció, jog és Helm-telepítés
+│   ├── ingress.tf       # Traefik
+│   ├── cert-manager.tf  # cert-manager és a Let's Encrypt ClusterIssuer
+│   ├── demo-app.tf      # colors demóalkalmazás (füstteszt)
+│   ├── outputs.tf
+│   └── environments/
+│       ├── sbx.tfvars, dev.tfvars, ...  # környezetenként egy fájl = egy igénylés
+│       └── _sablon.tfvars.example       # sablon az új igénylésekhez
+├── bootstrap/           # egyszeri beállítás (pipeline-identitás, secretek, ruleset)
+├── scripts/tf.sh        # helyi futtatás hibakereséshez
+└── dokumentacio/        # ez a leírás
 ```
 
-**Rögzített verziók:** Terraform ≥ 1.4, `hashicorp/azurerm` **5.3.0**, `hashicorp/azuread` **3.9.0**. A pontos verzió és a lock fájl biztosítja, hogy a kód ma és fél év múlva is ugyanúgy viselkedjen.
+### 4.2 Egyszeri beállítás: a pipeline Azure-identitása és a GitHub repo
 
-**Két környezet, két könyvtár.** A `sbx` és a `dev` könyvtár kódja **szándékosan azonos**, csak két helyen tér el:
+Ezt egyszer, a platform indulásakor csinálom meg, a saját fiókommal. Mindkét script újrafuttatható: ami már megvan, azt nem hozza létre újra.
 
-| Fájl | Mi különbözik | `sbx` | `dev` |
-|---|---|---|---|
-| `provider.tf` | a backend `key`-e (a state blobja) | `project-x-sbx.tfstate` | `project-x-dev.tfstate` |
-| `terraform.tfvars` | `env_name`, VNet-tartomány, lejárat, tagok | `sbx`, `10.224.0.0/12` | `dev`, `10.224.0.0/12` |
+**1. A pipeline identitása** – `bootstrap/01-azure-github-identity.sh`
 
-> Ez a kódduplikáció tudatos, átmeneti kompromisszum: így a két környezet state-je és életciklusa teljesen független, és a kód egyszerűen olvasható. A következő lépésben a közös részt modulba emelem, és a könyvtárak csak a modul paraméterezését tartalmazzák.
+```bash
+az login
+./bootstrap/01-azure-github-identity.sh
+```
 
-**A Terraform által kezelt erőforrások környezetenként:**
-
-| Fájl | Erőforrások |
+| Mit hoz létre | Miért |
 |---|---|
-| `common.tf` | `data.azurerm_client_config.current` |
-| `network.tf` | `azurerm_virtual_network.aks`, `azurerm_subnet.aks_nodes`, `azurerm_role_assignment.aks_subnet_network_contributor` |
-| `aks.tf` | `azurerm_resource_group.aks`, `azurerm_user_assigned_identity.aks`, `azurerm_kubernetes_cluster.aks`, `azuread_group.platform_admins`, `azuread_group.developers`, `azuread_group.readers` (ha van olvasó), `azuread_group_member.*`, `azurerm_role_assignment.aks[*]` |
-| `dns.tf` | `data.azurerm_dns_zone.parent`, `azurerm_resource_group.dns`, `azurerm_dns_zone.env`, `azurerm_dns_ns_record.delegation`, `azurerm_user_assigned_identity.external_dns`, `azurerm_federated_identity_credential.external_dns`, `azurerm_role_assignment.external_dns_zone_contributor` |
+| `github-repos` managed identity a `course-baseline`-ban | a pipeline ezzel az identitással dolgozik az Azure-ban; nincs jelszava |
+| 4 federated credential: a `platformeng-w3` ágra és a pull requestekre, mindkettő az új (módosíthatatlan azonosítós: `repo:vighsandor@<id>/cubixplatformeng@<id>:…`) és a régi (`repo:vighsandor/cubixplatformeng:…`) subject-formátumban | a GitHub OIDC-tokenjét az Entra ID csak akkor fogadja el, ha a `sub` mező pontosan egyezik; a GitHub a repó beállításától függően az egyik vagy a másik formát küldi, így mindkettőt felveszem |
+| **Owner** az előfizetésen | erőforrásokat hoz létre, és szerepköröket oszt ki (pl. a csoportoknak az AKS-en) |
+| **Storage Blob Data Contributor** a `platencbvighsandor` storage accounton | a state olvasása, írása, zárolása (az Owner adat-jogot nem ad) |
+| **Groups Administrator** Entra ID-szerepkör | Entra ID-csoportok létrehozása és a tagság kezelése |
+| **Directory Readers** Entra ID-szerepkör | a felhasználók kikeresése UPN alapján (`data "azuread_user"`) és a saját service principalja kikeresése |
 
-**A fontosabb AKS-beállítások a kódban** (a ClickOps-os portálbeállítások megfelelői):
+> Az Azure-szerepkörök (Owner, Blob Data Contributor) és az Entra ID-szerepkörök (Groups Administrator, Directory Readers) két külön világ: az előbbiek az Azure-erőforrásokra, az utóbbiak a címtárra (felhasználók, csoportok) adnak jogot. Az Entra ID-szerepkörök kiosztásához Global Administrator vagy Privileged Role Administrator jog kell.
 
-| ClickOps (portál) | Terraform (`azurerm_kubernetes_cluster`) |
+**2. A GitHub repo** – `bootstrap/02-github-repo.sh` (a `gh` CLI-vel, a repo adminjaként)
+
+```bash
+gh auth login
+./bootstrap/02-github-repo.sh secrets          # AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+./bootstrap/02-github-repo.sh default-branch   # a platformeng-w3 legyen az alapértelmezett ág
+# ... az első sikeres pipeline-futás után:
+./bootstrap/02-github-repo.sh ruleset
+```
+
+- **Secretek:** a három érték azonosító, nem jelszó. Secretként azért tárolom őket, hogy ne kelljen a workflow-ba égetni, és máshol is ugyanígy használható legyen.
+- **Alapértelmezett ág:** a kézzel indítható workflow-k (pl. a lebontás) csak az alapértelmezett ágon lévő workflow-fájlból indíthatók, és a pull requestek is ezt kínálják fel célágnak.
+- **Ruleset** a `platformeng-w3` ágon (*Settings* → *Rules* → *Rulesets*):
+
+  | Szabály | Beállítás | Miért |
+  |---|---|---|
+  | Require a pull request before merging | be, 0 kötelező jóváhagyás | közvetlen push tiltva; egyedül dolgozom, ezért jóváhagyást nem várok el, de a PR (plan + napló) kötelező |
+  | Require status checks to pass | `Terraform Plan` | csak akkor lehet merge-ölni, ha az `fmt`, a `validate` és a `plan` minden környezetre lefutott |
+  | Require branches to be up to date before merging | be | **semi-linear history:** csak a fő ág tetejére épülő ágat lehet merge-ölni, így a plan pontosan arra az állapotra futott, ami a merge után lesz |
+  | Block force pushes, Restrict deletions | be | a fő ág története nem írható át és nem törölhető |
+
+  > A kötelező ellenőrzés fix nevű kell legyen, a plan jobok neve viszont környezetenként más (`Terraform Plan (sbx)`, `Terraform Plan (dev)`). Ezért van egy összesítő job, amelynek a neve pontosan `Terraform Plan`, és csak akkor zöld, ha minden környezet plan-je sikeres. Így egy új környezet felvétele után sem kell a rulesetet módosítani.
+
+### 4.3 A kód felépítése
+
+**Egy kód, több környezet: workspace + tfvars.** A 3.0-ban környezetenként külön könyvtár (és duplikált kód) volt. Most egyetlen kód van, a környezetet a **Terraform workspace** választja ki: a backend workspace-enként külön state-blobot használ (`project-x.tfstateenv:sbx`), a bemeneteket pedig a `environments/<env>.tfvars` adja.
+
+```bash
+terraform workspace select -or-create dev
+terraform plan -var-file=environments/dev.tfvars
+```
+
+**Workspace-védelem.** A workspace önmagában veszélyes: a dev változókkal a sandbox workspace-ében futtatva a sandboxot írnám át. Ezt egy előfeltétel (precondition) zárja ki:
+
+```hcl
+resource "terraform_data" "workspace_guard" {
+  input = var.env_name
+  lifecycle {
+    precondition {
+      condition     = terraform.workspace == var.env_name
+      error_message = "A workspace (...) nem egyezik a környezettel (...)."
+    }
+  }
+}
+```
+
+**A Kubernetesen belüli rész is Terraform.** A Helm providerrel a Terraform ugyanabban a futásban, ugyanabból a kódból telepíti a Traefiket, az External DNS-t, a cert-managert, a ClusterIssuert és a demóalkalmazást. Ennek fő előnye, hogy **a Terraform-erőforrások közvetlenül elérhetők**: az External DNS values-ába a managed identity Client ID-ja, a zóna neve és a resource groupok neve közvetlenül az erőforrásokból kerül, nincs kézi másolás vagy sablonkitöltés. (A másik út, a Helm-parancsok a pipeline-ban, azt jelentené, hogy minden Helm-műveletet és -kapcsolót a pipeline-ban újra kellene implementálni.)
+
+- **Bejelentkezés a clusterbe:** az AKS-en nincsenek helyi fiókok, ezért a Helm provider a `kubelogin`-nal kér tokent az Azure CLI bejelentkezéséből (`--login azurecli`). Helyben ez a saját fiókom, a pipeline-ban a `github-repos` identitás; ezért a pipeline identitása is tagja a platform-admins csoportnak (`platform_admin_service_principals`).
+- **A ClusterIssuer** nem chart, hanem egy sima Kubernetes-erőforrás. A Helm provider nem tud nyers manifestet telepíteni, a Kubernetes provider pedig a CRD-k miatt nehézkes, ezért a `bedag/raw` „csomagoló” chartot használom: a chart a values-ban kapott erőforrásokat telepíti.
+- **Várakozás az RBAC-ra:** új környezetnél a csoporttagság és az AKS-szerepkör néhány perc alatt lép életbe. A Helm-telepítések egy `time_sleep` (180 s) után indulnak, különben az első futás 403-at kapna.
+- **Sorrend:** a függőségek miatt a Terraform maga rendezi: AKS → szerepkörök → várakozás → Traefik, External DNS, cert-manager → ClusterIssuer → demóalkalmazás.
+
+**Rögzített verziók:** Terraform ≥ 1.5, `azurerm` 5.3.0, `azuread` 3.9.0, `helm` 3.2.0, `time` 0.14.2, és minden chart pontos verzióval.
+
+**A portálbeállítások Terraform-megfelelői** (a ClickOps-os kiindulópontból):
+
+| ClickOps (portál) | Terraform |
 |---|---|
-| Pricing tier: Free | `sku_tier = "Free"` |
-| Automatic upgrade: Disabled | `automatic_upgrade_channel` nincs megadva (= none) |
-| Node security channel: None | `node_os_upgrade_channel = "None"` |
-| Node pool `system`, `Standard_D2as_v5`, Manual, 1 node | `node_provisioning_profile { mode = "Manual" }`, `default_node_pool { name = "system", node_count = 1, vm_size = var.node_vm_size, vnet_subnet_id = … }` |
-| Azure CNI Overlay, saját VNet | `network_profile { network_plugin = "azure", network_plugin_mode = "overlay", service_cidr, dns_service_ip }` |
-| User assigned managed identity | `identity { type = "UserAssigned", identity_ids = [...] }` |
-| Entra ID authentication with Azure RBAC | `azure_active_directory_role_based_access_control { azure_rbac_enabled = true }` |
-| Local accounts: Disabled | `local_account_disabled = true` |
+| Pricing tier: Free; Automatic upgrade: Disabled; Node security channel: None | `sku_tier = "Free"`, `automatic_upgrade_channel = null`, `node_os_upgrade_channel = "None"` |
+| Node pool `system`, `Standard_D2as_v5`, Manual, 1 node | `node_provisioning_profile { mode = "Manual" }`, `default_node_pool { … }` |
+| Azure CNI Overlay, saját VNet, user assigned identity | `network_profile { network_plugin_mode = "overlay" }`, `vnet_subnet_id`, `identity { type = "UserAssigned" }` |
+| Entra ID + Azure RBAC, Local accounts: Disabled | `azure_active_directory_role_based_access_control { azure_rbac_enabled = true }`, `local_account_disabled = true` |
 | OIDC + Workload Identity | `oidc_issuer_enabled = true`, `workload_identity_enabled = true` |
-| Infrastructure RG neve | `node_resource_group = "<projekt>-<env>-aks-nodes"` |
+| „Child of an existing zone” | `azurerm_dns_ns_record.delegation` a szülőzónában |
+| `helm upgrade --install …` (Traefik, External DNS, cert-manager, colors) | `helm_release` |
+| `kubectl apply -f cluster-issuer.yaml` | `helm_release` a `bedag/raw` charttal |
 
-### 4.3 Új környezet felvétele a kódba
+### 4.4 A pipeline működése (`.github/workflows/terraform.yml`)
 
-Ha az igénylés **új környezetet** kér (a meglévő `sbx` és `dev` már a repóban van):
+| Esemény | Mi fut | Eredmény |
+|---|---|---|
+| **pull request** a `platformeng-w3` ágra | `Terraform Plan (<env>)` minden környezetre, majd az összesítő `Terraform Plan` | a PR-on látszik, mit változtatna a merge; a ruleset ennek zöld állapotát várja |
+| **push** a `platformeng-w3` ágra (= merge) | újra plan, majd `Terraform Apply (<env>)` minden környezetre | a változás élesedik |
+| kézi indítás (*Run workflow*) | plan (és a fő ágon apply) | drift-ellenőrzés, újrafuttatás |
 
-1. Átmásolom egy meglévő környezet könyvtárát (a `state/` mappa nélkül):
+**A plan job lépései:** checkout → Azure-bejelentkezés (OIDC) → Terraform és kubelogin telepítése → `terraform fmt -check` → `init` → `workspace select -or-create <env>` → `validate` → `plan -var-file=… -out=tfplan` → a plan összefoglalója a futás *Summary* oldalára → a plan feltöltése artifactként.
 
-   ```bash
-   cp -r terraform/dev terraform/<env> && rm -rf terraform/<env>/state terraform/<env>/.terraform
-   ```
+**Az apply job** letölti **ugyanannak a futásnak** a plan-jét, és pontosan azt alkalmazza (`terraform apply tfplan`), nem számol újat. Így az élesedik, amit a napló mutat. A merge után a plan újra lefut, mert a pull request plan-je a merge előtti állapotra készült.
 
-2. A `terraform/<env>/provider.tf`-ben átírom a backend kulcsát: `key = "<projekt>-<env>.tfstate"`.
-3. A `terraform/<env>/terraform.tfvars`-ban kitöltöm az igénylőlap alapján:
+**Környezetek felderítése:** az első job kilistázza a `terraform/environments/*.tfvars` fájlokat, és ebből lesz a mátrix. **Új környezet = új tfvars fájl**, a workflow-t nem kell módosítani.
 
-   ```hcl
-   project_name = "<projekt>"
-   env_name     = "<env>"
-   expires      = "<lejárat, ÉÉÉÉ-HH-NN>"
+**Párhuzamosság és zárolás:** a környezetek egymástól függetlenül, párhuzamosan futnak; egy környezeten egyszerre csak egy apply futhat (`concurrency`), és a plan/apply legfeljebb 10 percig vár a state-zárolásra (`-lock-timeout=10m`).
 
-   vnet_address_space = "<a következő szabad /12>"
-   node_subnet_prefix = "<annak első /24-e>"
+### 4.5 Egy igénylés kiszolgálása (review → merge → apply)
 
-   developer_object_ids = ["<object ID>", ...]   # igénylőlap 5. pont, Írás
-   reader_object_ids    = []                     # igénylőlap 5. pont, Olvasás
-   ```
+1. **Beérkezik a pull request.** Ellenőrzöm az igénylőlapot: típus, igénylő, lejárat, indoklás.
+2. **Kiegészítem, ha kell.** Új környezetnél kiosztom a következő szabad hálózati tartományt, és egy commitot pusholok a PR ágára:
 
-   Az e-mail-címekhez tartozó object ID-t így kérdezem le: `az ad user show --id <e-mail> --query id -o tsv`.
+   | Környezet | `vnet_address_space` | `node_subnet_prefix` |
+   |---|---|---|
+   | `sbx` | `10.224.0.0/12` | `10.224.0.0/24` |
+   | `dev` | `10.240.0.0/12` | `10.240.0.0/24` |
+   | következő | `10.208.0.0/12` | `10.208.0.0/24` |
 
-4. A változtatást commitolom; a környezet ettől kezdve a kódban él.
+3. **Kvóta.** *Előfizetés → Usage + quotas*, Sweden Central: *Standard DASv5 Family vCPUs* és *Total Regional vCPUs*. Egy alapértelmezett környezet 2 vCPU. (Az `sbx` és a `dev` együtt pont kitölti a 4 vCPU-s DASv5-kvótát.)
+4. **A plan átnézése** (*Checks* → *Terraform Plan (<env>)* → *Summary*):
+   - új környezetnél csak `+ create` sorok, a többi környezetnél `No changes`;
+   - módosításnál pontosan a kért változás, semmi más (pl. tag-módosítás `~ update in-place`);
+   - **csere (`-/+ must be replaced`) esetén megállok**, és kiderítem, miért: az AKS sok beállítása csak újraépítéssel módosítható.
+5. **Az ág naprakész?** Ha a fő ág közben továbblépett, a GitHub az *Update branch* gombot kínálja (a ruleset csak naprakész ágat enged merge-ölni). Frissítés után a plan újra lefut.
+6. **Merge.** A pipeline `Terraform Apply (<env>)` jobja létrehozza / módosítja a környezetet.
+7. **Ellenőrzés és átadás** (4.6).
 
-### 4.4 1. lépés – Az infrastruktúra létrehozása (Terraform)
+### 4.6 Ellenőrzés és átadás
 
-A teljes folyamatot (4.4–4.7) a létrehozó script vezényli le:
-
-```bash
-./scripts/sbx-letrehozas.sh        # vagy: ./scripts/dev-letrehozas.sh
-                                   # általánosan: ./scripts/kornyezet-letrehozas.sh <env>
-```
-
-A script először a Terraform-részt futtatja. Kézzel ugyanez:
-
-```bash
-cd terraform/<env>
-terraform init                 # providerek letöltése, backend (state) bekötése
-terraform plan -out=tfplan     # mit fog csinálni? – ezt mindig elolvasom
-terraform apply tfplan         # pontosan a jóváhagyott tervet hajtja végre
-```
-
-> **Miért `plan -out` + `apply tfplan`?** Így az `apply` nem számol új tervet, hanem pontosan azt hajtja végre, amit átnéztem és jóváhagytam. A script a `plan` után megerősítést kér (`igen`), és csak utána alkalmazza. Pipeline-ban ugyanez a minta: egy lépés tervez, jóváhagyás után egy másik végrehajt.
-
-**Elvárt eredmény:** a `plan` 20–25 létrehozandó erőforrást mutat, módosítást és törlést nem. Az `apply` 5–10 perc (ennek nagy része az AKS), a végén `Apply complete!` és a kimenetek (`outputs`).
-
-**A Terraform-kimenetek**, amelyekre a következő lépéseknek szükségük van:
-
-```bash
-terraform output
-# aks_name, aks_resource_group, aks_oidc_issuer_url, dns_zone_name,
-# dns_resource_group, external_dns_client_id, external_dns_txt_owner_id, ...
-```
-
-### 4.5 2. lépés – Csatlakozás a clusterhez
-
-```bash
-az aks get-credentials -g "$(terraform output -raw aks_resource_group)" -n "$(terraform output -raw aks_name)" --overwrite-existing
-kubelogin convert-kubeconfig -l azurecli
-kubectl get nodes
-```
-
-**Elvárt eredmény:** egy `aks-system-…` node `Ready` állapotban. Ezzel azt is igazoltam, hogy a Terraformmal létrehozott csoporttagság és szerepkör működik. A szerepkör életbe lépése néhány percig tarthat; a script ezért legfeljebb 10 percig újrapróbálkozik.
-
-### 4.6 3. lépés – Kubernetesen belüli komponensek (kézi, Helm)
-
-A Kubernetesen belüli komponenseket ezen a szinten még **szándékosan nem Terraformmal** telepítem, hanem a megszokott Helm-parancsokkal. A paramétereiket viszont már nem kézzel másolom a portálról, hanem a **Terraform-kimenetekből** veszem. A sorrend számít: a demóalkalmazás telepítésekor már futnia kell az External DNS-nek és a cert-managernek.
-
-1. **Traefik:**
+1. Az apply futás *Summary* oldalán a `terraform output`: cluster, DNS-zóna, csoportok, demó URL, csatlakozási parancsok.
+2. Csatlakozom, és ellenőrzöm a láncot:
 
    ```bash
-   helm upgrade --install traefik traefik \
-     --repo https://traefik.github.io/charts --version 41.2.0 \
-     --namespace ingress-controller --create-namespace \
-     --set service.annotations."service\.beta\.kubernetes\.io/azure-load-balancer-health-probe-request-path"=/healthz \
-     --set ports.web.http.redirections.entryPoint.to=websecure \
-     --set ports.web.http.redirections.entryPoint.scheme=https \
-     --set ports.web.http.redirections.entryPoint.permanent=true
+   az aks get-credentials -g <projekt>-<env>-aks -n <projekt>-<env> --overwrite-existing
+   kubelogin convert-kubeconfig -l azurecli
+   kubectl get nodes
+   kubectl get pods,ingress -A
+   kubectl get clusterissuer,certificate -A
+   curl -k https://colors.<projekt>.<env>.vighsandor.az.cubix-pe.hu   # <title>Rollouts Demo</title>
    ```
 
-2. **External DNS:** a values fájlt a `k8s/external-dns.values.tmpl.yaml` sablonból töltöm ki:
+3. Átadó üzenet:
 
-   | Sablonhely | Terraform-kimenet |
-   |---|---|
-   | `__TXT_OWNER_ID__` | `external_dns_txt_owner_id` |
-   | `__DNS_ZONE__` | `dns_zone_name` |
-   | `__CLIENT_ID__` | `external_dns_client_id` |
-   | `__SUBSCRIPTION_ID__` | `subscription_id` |
-   | `__IDENTITY_RG__` | `aks_resource_group` (a managed identity resource groupja) |
-   | `__DNS_RG__` | `dns_resource_group` (a DNS-zóna resource groupja) |
+   ```text
+   Szia <név>!
 
-   ```bash
-   helm upgrade --install external-dns external-dns \
-     --repo=https://kubernetes-sigs.github.io/external-dns/ --version=1.20.0 \
-     --namespace=external-dns --create-namespace \
-     --values=k8s/external-dns.<env>.values.yaml
+   Elkészült a(z) <projekt> projekt <env> környezete (PR: #<szám>).
+
+   - Előfizetés: <ELŐFIZETÉS-AZONOSÍTÓ>
+   - AKS cluster: <projekt>-<env> (resource group: <projekt>-<env>-aks)
+   - DNS-zóna: <projekt>.<env>.vighsandor.az.cubix-pe.hu
+     (ezen belül bármilyen hosztnevet használhatsz, a DNS-rekord automatikusan létrejön)
+   - Ingress class: traefik, ClusterIssuer: letsencrypt (staging)
+   - Csoport, amelynek tagja lettél: <projekt>-<env>-developers (RBAC Writer)
+   - Demó: https://colors.<projekt>.<env>.vighsandor.az.cubix-pe.hu
+
+   Csatlakozás:
+     az aks get-credentials -g <projekt>-<env>-aks -n <projekt>-<env> --overwrite-existing
+     kubelogin convert-kubeconfig -l azurecli
+
+   Lejárat: <dátum>. Módosítás, meghosszabbítás: pull request a környezeted tfvars fájljára.
    ```
 
-   > A Client ID-t korábban a portálról másoltam ki, és egyszer egy törölt, azonos nevű identitás régi azonosítója került a fájlba. A Terraform-kimenetből ez a hiba nem fordulhat elő.
+### 4.7 Módosítás és drift
 
-3. **cert-manager és ClusterIssuer:**
+- **Minden módosítás pull request** a `tfvars`-ra (tagok, lejárat, méret) vagy a kódra (platformváltozás). A kódváltozás minden környezet plan-jében megjelenik, így látom, hogy melyiket hogyan érinti.
+- **Drift-gyanú esetén** kézzel indítok egy futást (*Actions* → *Terraform* → *Run workflow*, ág: `platformeng-w3`). A plan megmutatja az eltérést; a fő ágon az apply vissza is állítja a kódban leírt állapotot. Ha az eltérés jogos volt, előbb a kódot igazítom (pull request).
 
-   ```bash
-   helm upgrade --install cert-manager cert-manager \
-     --version=v1.19.4 --repo=https://charts.jetstack.io \
-     --namespace=cert-manager --create-namespace \
-     --set crds.enabled=true --set prometheus.enabled=false
-   kubectl apply -f k8s/cluster-issuer.yaml    # letsencrypt (staging), platformengineer@vighsandor.hu
-   ```
+### 4.8 Megszüntetés (lebontás)
 
-4. **Demóalkalmazás (smoketest):**
+A lebontás szándékosan **nem automatikus**, és két lépésből áll:
 
-   ```bash
-   helm upgrade --install --namespace=colors --create-namespace colors \
-     oci://docker.io/ecklm/colors-demo-app \
-     --set ingress.host=colors.<projekt>.<env>.vighsandor.az.cubix-pe.hu \
-     --set ingress.annotations."cert-manager\.io/cluster-issuer"=letsencrypt
-   ```
+1. **Lebontás a pipeline-nal:** *Actions* → **Terraform destroy** → *Run workflow* (ág: `platformeng-w3`), `environment`: a környezet neve, `confirm`: még egyszer a neve. A workflow a `terraform destroy`-jal mindent töröl, amit a kód létrehozott: a Helm-telepítéseket, az AKS-t, a hálózatot, az identitásokat, a DNS-zónát és a delegációt, valamint az Entra ID-csoportokat és a tagságokat is.
+2. **A környezet kivezetése a kódból:** pull request, amely törli a `terraform/environments/<env>.tfvars` fájlt. Ezt **a lebontás után** kell merge-ölni: ha előbb törlöm a fájlt, a pipeline már nem látja a környezetet, és a lebontást kézzel kellene elvégezni.
 
-**Elvárt eredmény:** 1–2 percen belül megjelenik a `colors` A és TXT rekord az alzónában; néhány perc múlva a tanúsítvány `READY=True`.
+> Ha egy környezetre csak átmenetileg nincs szükség (pl. a hétvégére), elég az 1. lépés. Fontos azonban, hogy **a fő ágra kerülő következő merge újra felépíti**, mert a kódban továbbra is benne van; ez a deklaratív működés lényege.
 
-### 4.7 4. lépés – Ellenőrzés és dokumentálás
+### 4.9 Helyi futtatás (hibakereséshez)
 
-A létrehozó script a végén elvégzi, és a repóba menti:
-
-1. **State-pillanatkép:** `terraform state pull` → `terraform/<env>/state/<projekt>-<env>.tfstate`, valamint a `terraform state list` → `terraform/<env>/state/<projekt>-<env>.state-list.txt`.
-
-   > A state élő példánya a backendben (Azure Storage) van; a repóba csak a létrehozás utáni pillanatképet teszem a beadáshoz és az átláthatósághoz. A state-ben nincs titkos kulcs (helyi fiókok tiltva, a gépi identitások federáltak), de érzékeny adat (azonosítók, belső címek) igen, ezért éles környezetben a state **nem kerülne publikus repóba**.
-
-2. **Segédscript:** az oktatói segédscriptet (B. függelék) a környezet Terraform-könyvtárában futtatom (a végén lévő `terraform state list` miatt), kimenet: `kimenetek/segedscript-kimenet-<env>.txt`. A scriptet nem módosítom; a futtatás előtt csak a kitöltendő helyeit töltöm ki az adott környezet neveivel (`<domain>` → az alzóna neve, az External DNS identitás neve, illetve `dev` esetén a `project-x-sbx` nevek → `project-x-dev`).
-3. **Végpont:** `curl -sk https://colors.<projekt>.<env>.vighsandor.az.cubix-pe.hu`, kimenet: `kimenetek/curl-<env>.txt`. Elvárt: HTML-válasz `<title>Rollouts Demo</title>`-lel.
-4. **Beillesztés a dokumentációba:** `./scripts/kimenetek-beillesztese.sh` – a kimeneteket változtatás nélkül, code blockban beilleszti a C. függelékbe.
-
-### 4.8 5. lépés – Átadás a fejlesztőnek
-
-```text
-Szia <név>!
-
-Elkészült a(z) <projekt> projekt <env> környezete.
-
-- Előfizetés: <ELŐFIZETÉS-AZONOSÍTÓ>
-- Resource group: <projekt>-<env>-aks
-- AKS cluster: <projekt>-<env>
-- DNS-zóna: <projekt>.<env>.vighsandor.az.cubix-pe.hu
-  (ezen belül bármilyen hosztnevet használhatsz, a DNS-rekord automatikusan létrejön)
-- Ingress class: traefik, ClusterIssuer: letsencrypt (staging)
-- Csoport, amelynek tagja lettél: <projekt>-<env>-developers (RBAC Writer)
-- Demó: https://colors.<projekt>.<env>.vighsandor.az.cubix-pe.hu
-
-Csatlakozás:
-  az login
-  az aks get-credentials -g <projekt>-<env>-aks -n <projekt>-<env> --overwrite-existing
-  kubelogin convert-kubeconfig -l azurecli
-
-A környezet lejárata: <dátum>. Hosszabbítási igényt kérlek 3 munkanappal előtte jelezz.
-```
-
-### 4.9 Módosítás (módosító igénylés)
-
-Minden változtatás ugyanazon az úton megy: **kód → `plan` → átnézés → `apply` → commit**.
-
-| Igény | Hol módosítok |
-|---|---|
-| Új fejlesztő / kilépő fejlesztő | `terraform.tfvars`: `developer_object_ids` / `reader_object_ids` |
-| Meghosszabbítás | `terraform.tfvars`: `expires` |
-| Más node-méret | `terraform.tfvars`: `node_vm_size = "..."` (a kvótát előtte ellenőrzöm) |
-| Kubernetes-frissítés | `terraform.tfvars`: `kubernetes_version = "..."` |
+A rendes út a pipeline. Hibakereséshez vagy ha a GitHub nem elérhető, helyben is futtatható, a saját fiókommal:
 
 ```bash
-cd terraform/<env>
-terraform plan -out=tfplan    # pontosan a kért változást mutatja-e? semmi mást?
-terraform apply tfplan
+az login
+./scripts/tf.sh dev plan        # csak megnéz, nem módosít
+./scripts/tf.sh dev apply       # csak vészhelyzetben: megkerüli a review-t
 ```
-
-> Ha a `plan` olyan változást is mutat, amit nem kértem, az **drift**: valaki a portálon módosított valamit. Ilyenkor nem alkalmazom vakon, hanem kiderítem az okát, és vagy a kódot igazítom, vagy az `apply`-jal visszaállítom a kódban leírt állapotot.
-
-### 4.10 Megszüntetés (lebontás)
-
-```bash
-./scripts/sbx-lebontas.sh        # vagy: ./scripts/dev-lebontas.sh
-                                 # általánosan: ./scripts/kornyezet-lebontas.sh <env>
-```
-
-A script:
-
-1. megerősítésként bekéri a környezet nevét;
-2. eltávolítja a Kubernetesen belüli komponenseket: előbb az alkalmazást, hogy az External DNS még törölhesse a saját rekordjait, majd az External DNS-t, a cert-managert és a Traefiket (ez felszabadítja a load balancer publikus IP-jét);
-3. lefuttatja a `terraform destroy`-t: ez törli **mindazt, amit a Terraform létrehozott**, az Entra ID-csoportokat, a tagságokat és az NS-delegációt is. ClickOps-szal ezekre külön kellett figyelnem, mert nem a resource groupokban élnek; a Terraform a state alapján ezeket is tudja;
-4. törli a helyi kubeconfig-bejegyzést.
-
-> A repóban lévő state-pillanatképhez a lebontás nem nyúl, az a létrehozás utáni állapotot dokumentálja. A `course-baseline` resource group (szülőzóna, state storage account) megmarad, mert minden környezet erre épül.
 
 ---
 
@@ -509,627 +503,154 @@ A script:
 
 | Tünet | Ok | Teendő |
 |---|---|---|
-| `terraform init`: *403 … AuthorizationPermissionMismatch* | Hiányzik a *Storage Blob Data Contributor* a state storage accountján (az *Owner* nem elég) | Szerepkör kiosztása (a script megteszi), néhány perc várakozás |
-| `terraform apply`: *… already exists – to be managed via Terraform this resource needs to be imported* | Az erőforrás kézzel (ClickOps) már létrejött | A régi erőforrás törlése (az Entra ID-csoportokat is!), vagy `terraform import` |
-| `terraform apply`: kvótahiba | Elfogyott a DASv5- vagy a régiós vCPU-kvóta | Usage + quotas; kvótaemelés, `node_vm_size` másik családra (arra is kell kvóta), vagy egy nem használt környezet lebontása |
-| `terraform apply`: *The size … is currently unavailable* | A VM-méret nem elérhető | `node_vm_size` módosítása |
-| `Error acquiring the state lock` | Egy másik (vagy megszakadt) futás tartja a state zárolását | Ellenőrzöm, hogy tényleg nem fut-e más; ha nem, `terraform force-unlock <ID>` |
-| A `plan` olyan változást mutat, amit nem kértem | Drift: kézi módosítás a portálon | Kiderítem az okát (4.9) |
-| A `kubectl` 403 / Forbidden hibát ad | A szerepkör vagy a csoporttagság még nem lépett életbe | Néhány perc várakozás; `az logout`, `az login` |
-| Az `external-dns` pod `CrashLoopBackOff`, vagy *AADSTS* hiba a naplóban | Hibás values (Client ID, resource group), vagy a federated credential nem egyezik | A values újragenerálása a Terraform-kimenetekből (4.6); a Workload Identity be van-e kapcsolva |
-| Nem jön létre DNS-rekord | A host nincs a környezet alzónáján belül, vagy hibás a DNS resource group | Az Ingress hostjának és a values fájlnak az ellenőrzése |
-| A tanúsítvány `pending`, nem lesz `READY` | A DNS-név még nem az ingress IP-jére mutat | `nslookup`, az External DNS naplója, várakozás |
-| A böngésző „nem biztonságos” kapcsolatot jelez | Let's Encrypt staging tanúsítvány | Várt viselkedés; `curl -k` |
-| A segédscriptben üres a VNet-lista | A segédscript a VNetet a `…-aks-nodes` resource groupban keresi, de a saját VNet a `…-aks` resource groupban van | Várt viselkedés, a segédscriptet nem módosítom; a VNet a `terraform state list`-ben és az `az group list` / `az resource list -g <projekt>-<env>-aks` kimenetben látszik |
+| `azure/login`: *AADSTS700213 / AADSTS70021: No matching federated identity record found* | A GitHub OIDC-tokenjének `sub` mezője nem egyezik egyik federated credentiallel sem (más ág, repo-átnevezés, más subject-formátum) | A hibaüzenetben szerepel a kapott subject; vedd fel azt is federated credentialként (`01-azure-github-identity.sh`, vagy a portálon) |
+| `terraform init`: *403 AuthorizationPermissionMismatch* | Hiányzik a *Storage Blob Data Contributor* a state storage accountján | `01-azure-github-identity.sh` újrafuttatása, pár perc várakozás |
+| `azuread_group`: *Authorization_RequestDenied* | A pipeline identitásának nincs *Groups Administrator* szerepköre | `01-azure-github-identity.sh`; az Entra-szerepkör életbe lépése akár 10–15 perc |
+| `data.azuread_user`: *User not found* / *Insufficient privileges* | Rossz UPN a `tfvars`-ban, vagy hiányzik a *Directory Readers* | A UPN ellenőrzése (`az ad user show --id <UPN>`), a szerepkör ellenőrzése |
+| `Error acquiring the state lock` | Egy másik futás (pl. egy merge apply-ja) épp ugyanazt a környezetet zárolja | A futás 10 percig vár; ha így is elbukik, *Re-run failed jobs* |
+| A workspace-védelem hibát ad | A workspace és az `env_name` nem egyezik (pl. elgépelt fájlnév) | A `tfvars` fájl neve, az `env_name` és a workspace legyen azonos |
+| `helm_release`: *Unauthorized* / *forbidden* az első futáskor | Az AKS-szerepkör vagy a csoporttagság még nem lépett életbe | *Re-run failed jobs*; a második futás már a meglévő környezetre megy |
+| `kubelogin: executable file not found` | Hiányzik a kubelogin (a pipeline-ban az `azure/use-kubelogin` lépés, helyben a telepítés) | Telepítés |
+| *AADSTS700024: Client assertion is not within its valid time range* hosszú futásnál | Az Azure CLI-bejelentkezés a GitHub OIDC-tokenjét használja, amely korlátozott ideig érvényes | *Re-run failed jobs*; a második futás rövidebb, mert az AKS már létezik |
+| A PR-on a merge gomb szürke: *This branch is out-of-date* | A ruleset csak naprakész ágat enged merge-ölni | *Update branch* a PR-on, utána a plan újra fut |
+| A PR-on a `Terraform Plan` ellenőrzés „Expected — Waiting for status” | A workflow nem futott le (pl. a célág nem a `platformeng-w3`) | A PR célága legyen `platformeng-w3`; szükség esetén zárd be és nyisd újra a PR-t |
+| `terraform fmt -check` elbukik | Formázási eltérés | Helyben `terraform fmt -recursive terraform/`, commit, push |
+| Kvótahiba az apply-ban | Elfogyott a DASv5- vagy a régiós vCPU-kvóta | Kvótaemelés, `node_vm_size` másik családra (arra is kell kvóta), vagy egy nem használt környezet lebontása |
+| Az apply *already exists – needs to be imported* hibát ad | Egy korábbi (kézi vagy 3. heti) erőforrás maradt meg, pl. egy NS-rekord a szülőzónában vagy egy Entra ID-csoport | A maradvány törlése, vagy `terraform import` |
 
 ---
 
-## A. függelék – Környezetigénylő lap (Markdown-sablon)
+## A. függelék – Az igénylőlap (pull request sablon)
 
-Ezt a sablont másolja le és tölti ki a fejlesztő (lásd 3.3). Külön fájlként is elérhető: `dokumentacio/igenyleslap-sablon.md`. A sablon alján lévő részt én töltöm ki az igénylés kiszolgálása közben.
+A pull request leírása automatikusan ez a sablon (`.github/pull_request_template.md`). A géppel feldolgozott rész a `tfvars` fájl, ez az emberi kontextus hozzá.
 
-```markdown
-# Környezetigénylés – Project platform
-
-> **Kitöltési útmutató:** mentsd el ezt a fájlt `igenyles-<projekt>-<env>.md` néven. A `<…>` helyekre írd be az értéket, a választós kérdéseknél pedig a megfelelő sorban cseréld a `[ ]` jelet `[x]`-re. A `*` kötelező mezőt jelöl. A kitöltött fájlt küldd el a platform engineernek.
+````markdown
+<!--
+Környezetigénylés / -módosítás – Project platform
+Kitöltési útmutató: dokumentacio/kornyezetigenyles.md, 3. fejezet.
+A géppel feldolgozott rész a terraform/environments/<env>.tfvars fájl ebben a
+pull requestben; ez a leírás az emberi kontextus hozzá. A `[ ]` jelet `[x]`-re
+cseréld a megfelelő sorban. A *-gal jelölt mezők kötelezők.
+-->
 
 ## 1. Az igénylés típusa *
 
-- [ ] Új környezet
-- [ ] Módosítás (tagok felvétele vagy eltávolítása, más méret)
-- [ ] Meghosszabbítás
+- [ ] Új környezet (új `terraform/environments/<env>.tfvars`)
+- [ ] Módosítás (tagok, méret)
+- [ ] Meghosszabbítás (`expires`)
 - [ ] Megszüntetés
+- [ ] Platformváltozás (a Terraform-kód módosítása – csak platform engineer)
 
 ## 2. Igénylő
 
 | Mező | Érték |
 |---|---|
-| Név * | `<név>` |
-| Entra ID e-mail-cím * | `<név@ceg.hu>` |
-| Csapat * | `<csapat neve>` |
-| Költséghely / jóváhagyó vezető * | `<költséghely, vezető neve>` |
+| Név * | |
+| Entra ID UPN * | |
+| Csapat * | |
+| Költséghely / jóváhagyó vezető * | |
 
 ## 3. Környezet
 
 | Mező | Érték |
 |---|---|
-| Projekt azonosítója * (kisbetű, szám, kötőjel; legfeljebb 15 karakter, betűvel kezdődik) | `<projekt>` |
-| Mire használjátok a környezetet? * | `<rövid leírás>` |
+| Projekt * | |
+| Környezet (`env_name`, = a tfvars fájl neve) * | |
+| Mire használjátok? * | |
+| Mikorra kell? * | |
+| Lejárat (`expires`, max. 3 hónap) * | |
 
-**Környezet típusa \***
+## 4. Hozzáférés
 
-- [ ] `sbx` – kísérletezés, egyéni sandbox
-- [ ] `dev` – közös fejlesztési környezet
-- [ ] `test` – tesztelés
+A tfvars `developers` (írás) és `readers` (olvasás) térképébe írd be a tagokat
+`név = "UPN"` formában. Itt csak azt írd le, ha valami eltér a megszokottól.
 
-## 4. Tervezett alkalmazások és hosztnevek (tájékoztató)
-
-A DNS-rekordokat a platform automatikusan létrehozza az Ingress-erőforrásokból, ezért a hosztneveket **nem kell előre igényelni**. A tervezett neveket csak a kapacitástervezéshez kérem. A hosztnevek formája: `<app>.<projekt>.<env>.vighsandor.az.cubix-pe.hu`.
-
-| # | Alkalmazás (hosztnév-előtag) | Rövid leírás |
-|---|---|---|
-| 1 | `<app>` | `<mit csinál>` |
-| 2 | | |
-
-## 5. Hozzáférés *
-
-A felsorolt személyeket a jogosultsági szintnek megfelelő Entra ID-csoportba veszem fel. A jogosultságot a csoport kapja, nem a személy.
-
-| Entra ID e-mail-cím | Jogosultság (Írás / Olvasás) |
-|---|---|
-| `<név@ceg.hu>` | `Írás` |
-| | |
-
-> Írás → `<projekt>-<env>-developers` csoport (Azure Kubernetes Service RBAC Writer).
-> Olvasás → `<projekt>-<env>-readers` csoport (Azure Kubernetes Service RBAC Reader).
-> Mindkét csoport megkapja az Azure Kubernetes Service Cluster User Role szerepkört is, a kubeconfig letöltéséhez.
-
-## 6. Erőforrásméret *
+## 5. Erőforrásméret
 
 - [ ] Alapértelmezett: 1 node, 2 vCPU, 8 GiB RAM (`Standard_D2as_v5`)
-- [ ] Egyedi méret. Indoklás: `<miért kevés az alapértelmezett, mekkora kellene>`
+- [ ] Egyedi (`node_vm_size` / `node_count` a tfvars-ban). Indoklás:
 
-## 7. Szükséges platformképességek
-
-- [x] HTTPS ingress (Traefik)
-- [x] Automatikus DNS-név (External DNS)
-- [x] Automatikus TLS-tanúsítvány (cert-manager, Let's Encrypt staging)
-
-## 8. Időzítés
-
-| Mező | Érték |
-|---|---|
-| Mikorra van rá szükség? * | `<ÉÉÉÉ-HH-NN>` |
-| Lejárat * (legfeljebb 3 hónap, hosszabbítható) | `<ÉÉÉÉ-HH-NN>` |
-
-## 9. Megjegyzés
-
-`<bármi, amit még tudnom kell>`
+## 6. Megjegyzés
 
 ---
 
-## Platform engineer tölti ki
+### Platform engineer tölti ki (review)
 
-| Mező | Érték |
-|---|---|
-| Beérkezés dátuma | |
-| Döntés (jóváhagyva / elutasítva / kérdés) | |
-| Kvóta ellenőrizve (DASv5 / régiós vCPU) | |
-| Terraform-könyvtár (`terraform/<env>`) és state kulcs | |
-| Tagok object ID-i a `terraform.tfvars`-ban (developers / readers) | |
-| `terraform apply` dátuma, commit | |
-| DNS-zóna | |
-| Traefik EXTERNAL-IP | |
-| Segédscript-kimenet csatolva (`kimenetek/`) | |
-| Átadás dátuma | |
-| Megszüntetés dátuma (`terraform destroy`) | |
-```
+- [ ] A `Terraform Plan` ellenőrzés zöld, és a plan **csak** az igényelt környezetet érinti
+- [ ] A `vnet_address_space` / `node_subnet_prefix` szabad, át nem fedő tartomány
+- [ ] Kvóta ellenőrizve (DASv5 / régiós vCPU)
+- [ ] A tagok UPN-jei léteznek (a plan kikereste őket)
+- [ ] Merge után: a `Terraform Apply` sikeres, átadó üzenet elküldve
+````
 
 ---
 
-## B. függelék – Segédscript
+## B. függelék – A környezet tfvars sablonja
 
-Az ellenőrzéshez és a beadandó listákhoz használt oktatói segédscript (`segedscript/3-iac-7-homework.sh`), változtatás nélkül. A futtatásának módját a 4.7 írja le.
+`terraform/environments/_sablon.tfvars.example` – a `.example` végződés miatt a pipeline nem tekinti környezetnek.
 
-```bash
-#!/bin/bash
+```hcl
+# =============================================================================
+# Környezetigénylés – sablon
+# Másold le environments/<env>.tfvars néven, töltsd ki, és nyiss vele pull
+# requestet (lásd: dokumentacio/kornyezetigenyles.md, 3. fejezet).
+# =============================================================================
 
-az group list -o table
-az aks list -o table
-az network vnet list --resource-group project-x-sbx-aks-nodes -o table
-az network dns zone list
+project_name = "<projekt>"   # kisbetű, szám, kötőjel; max. 15 karakter
+env_name     = "<env>"       # = a fájl neve, pl. dev
+expires      = "ÉÉÉÉ-HH-NN"  # lejárat, max. 3 hónap
 
-# A bejegyzett DNS nevek listája
-az network dns record-set list --resource-group project-x-sbx-dns --zone-name <domain> -o table
+# A platform engineer tölti ki (a következő szabad /12):
+vnet_address_space = "10.x.0.0/12"
+node_subnet_prefix = "10.x.0.0/24"
 
-# Kubernetesen belüli erőforrások listája és státusza
-kubectl get -A pods,ingress,ClusterIssuer,secrets,namespace
+# Hozzáférés: név => Entra ID UPN (userPrincipalName)
+platform_admins = {
+  vighsandor = "platformengineer_vighsandor.hu#EXT#@platformengineervighsandor.onmicrosoft.com"
+}
+platform_admin_service_principals = {
+  github-actions = "github-repos"
+}
+developers = {
+  # vezeteknev = "upn@tenant.onmicrosoft.com"
+}
+readers = {
+  # vezeteknev = "upn@tenant.onmicrosoft.com"
+}
 
-# Managed identity és federated credential
-az identity list -o table
-az identity federated-credential list --resource-group project-x-sbx-aks --identity-name project-x-hw-externaldns -o table
-
-# Group and role assignment
-az ad group list -o table
-az role assignment list --all -o table
-
-# Tarraform
-terraform state list
+# Opcionális (csak indoklással):
+# node_vm_size = "Standard_D2as_v5"
+# node_count   = 1
 ```
 
----
+Példa: a `dev` környezet kitöltve (`terraform/environments/dev.tfvars`):
 
-## C. függelék – A segédscript és a végpont kimenetei
+```hcl
+# =============================================================================
+# A(z) project-x dev környezet bemenetei (igénylés: lásd a pull requestet)
+# Workspace: dev   –   a fájl neve, az env_name és a workspace neve egyezik
+# =============================================================================
 
-A kimeneteket a `./scripts/kimenetek-beillesztese.sh` illeszti be változtatás nélkül, a létrehozó scriptek futása után.
+project_name = "project-x"
+env_name     = "dev"
+expires      = "2027-02-21"
 
-### C.1 `project-x-sbx` – segédscript
+# Hálózat: környezetenként saját, át nem fedő /12
+vnet_address_space = "10.240.0.0/12"
+node_subnet_prefix = "10.240.0.0/24"
 
-<!-- KIMENET:segedscript-kimenet-sbx.txt -->
+# Hozzáférés: ember által olvasható név => Entra ID UPN
+# (az object ID-t a Terraform keresi ki, lásd entra.tf)
+platform_admins = {
+  vighsandor = "platformengineer_vighsandor.hu#EXT#@platformengineervighsandor.onmicrosoft.com"
+}
+platform_admin_service_principals = {
+  github-actions = "github-repos" # a pipeline identitása: a Helm-telepítéshez kell a cluster-admin jog
+}
+developers = {
+  vighsandor = "platformengineer_vighsandor.hu#EXT#@platformengineervighsandor.onmicrosoft.com"
+}
+readers = {
+  vighsandor = "platformengineer_vighsandor.hu#EXT#@platformengineervighsandor.onmicrosoft.com"
+}
 ```
-Name                     Location       Status
------------------------  -------------  ---------
-azure-signup-rg          eastus         Succeeded
-course-baseline          swedencentral  Succeeded
-NetworkWatcherRG         swedencentral  Succeeded
-project-x-sbx-aks        swedencentral  Succeeded
-project-x-sbx-dns        swedencentral  Succeeded
-project-x-sbx-aks-nodes  swedencentral  Succeeded
-Name           Location       ResourceGroup      KubernetesVersion    CurrentKubernetesVersion    ProvisioningState    Fqdn
--------------  -------------  -----------------  -------------------  --------------------------  -------------------  ------------------------------------------------------
-project-x-sbx  swedencentral  project-x-sbx-aks  1.36.3               1.36.3                      Succeeded            project-x-sbx-dns-oh1ja1vx.hcp.swedencentral.azmk8s.io
-
-[
-  {
-    "etag": "77f79121-66ee-4cf4-ad20-4d9909197616",
-    "id": "/subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/course-baseline/providers/Microsoft.Network/dnszones/vighsandor.az.cubix-pe.hu",
-    "location": "global",
-    "maxNumberOfRecordSets": 10000,
-    "name": "vighsandor.az.cubix-pe.hu",
-    "nameServers": [
-      "ns1-05.azure-dns.com.",
-      "ns2-05.azure-dns.net.",
-      "ns3-05.azure-dns.org.",
-      "ns4-05.azure-dns.info."
-    ],
-    "numberOfRecordSets": 4,
-    "resourceGroup": "course-baseline",
-    "tags": {},
-    "type": "Microsoft.Network/dnszones",
-    "zoneType": "Public"
-  },
-  {
-    "etag": "4f23eb65-0510-4d53-9dd9-b9c6d2271e45",
-    "id": "/subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-sbx-dns/providers/Microsoft.Network/dnszones/project-x.sbx.vighsandor.az.cubix-pe.hu",
-    "location": "global",
-    "maxNumberOfRecordSets": 10000,
-    "name": "project-x.sbx.vighsandor.az.cubix-pe.hu",
-    "nameServers": [
-      "ns1-09.azure-dns.com.",
-      "ns2-09.azure-dns.net.",
-      "ns3-09.azure-dns.org.",
-      "ns4-09.azure-dns.info."
-    ],
-    "numberOfRecordSets": 4,
-    "resourceGroup": "project-x-sbx-dns",
-    "tags": {
-      "environment": "sbx",
-      "expires": "2027-02-09",
-      "managed_by": "terraform",
-      "owner": "platformengineer@vighsandor.hu",
-      "project": "project-x"
-    },
-    "type": "Microsoft.Network/dnszones",
-    "zoneType": "Public"
-  }
-]
-TTL     Fqdn                                               Name      ProvisioningState    ResourceGroup
-------  -------------------------------------------------  --------  -------------------  -----------------
-172800  project-x.sbx.vighsandor.az.cubix-pe.hu.           @         Succeeded            project-x-sbx-dns
-3600    project-x.sbx.vighsandor.az.cubix-pe.hu.           @         Succeeded            project-x-sbx-dns
-300     a-colors.project-x.sbx.vighsandor.az.cubix-pe.hu.  a-colors  Succeeded            project-x-sbx-dns
-300     colors.project-x.sbx.vighsandor.az.cubix-pe.hu.    colors    Succeeded            project-x-sbx-dns
-NAMESPACE            NAME                                                       READY   STATUS    RESTARTS        AGE
-cert-manager         pod/cert-manager-687c8dcfbb-2vq2r                          1/1     Running   0               96s
-cert-manager         pod/cert-manager-cainjector-5bfdf76ddd-slkzj               1/1     Running   0               96s
-cert-manager         pod/cert-manager-webhook-578b8cbb44-rhpxq                  1/1     Running   0               96s
-colors               pod/colors-colors-demo-app-5ffff85675-dddkp                1/1     Running   0               63s
-external-dns         pod/external-dns-6cc8b86d8-qrrxd                           1/1     Running   0               2m
-ingress-controller   pod/traefik-68895f75cb-qhl4n                               1/1     Running   0               2m31s
-kube-system          pod/azure-cns-6rwq5                                        2/2     Running   0               4m18s
-kube-system          pod/azure-ip-masq-agent-54dlw                              1/1     Running   0               4m18s
-kube-system          pod/azure-wi-webhook-controller-manager-58db98bffb-w685h   1/1     Running   1 (3m29s ago)   4m37s
-kube-system          pod/azure-wi-webhook-controller-manager-58db98bffb-zbwcr   1/1     Running   1 (3m24s ago)   4m37s
-kube-system          pod/cloud-node-manager-fzm42                               1/1     Running   0               4m18s
-kube-system          pod/coredns-5bf45f87d-wgvq5                                1/1     Running   0               4m37s
-kube-system          pod/coredns-5bf45f87d-x2h9v                                1/1     Running   0               3m34s
-kube-system          pod/coredns-autoscaler-7467554f77-q5qnk                    1/1     Running   0               4m37s
-kube-system          pod/csi-azuredisk-node-zvwcz                               3/3     Running   0               4m18s
-kube-system          pod/csi-azurefile-node-xbtzj                               4/4     Running   0               4m18s
-kube-system          pod/konnectivity-agent-5854c8f68c-bx2d9                    1/1     Running   0               4m34s
-kube-system          pod/konnectivity-agent-5854c8f68c-cvtr9                    1/1     Running   0               3m34s
-kube-system          pod/konnectivity-agent-autoscaler-5b658f6697-984jx         1/1     Running   0               4m34s
-kube-system          pod/kube-proxy-tqbc6                                       1/1     Running   0               4m18s
-kube-system          pod/metrics-server-dff79fd46-99r24                         2/2     Running   0               3m17s
-kube-system          pod/metrics-server-dff79fd46-cv7g9                         2/2     Running   0               3m17s
-
-NAMESPACE   NAME                                               CLASS     HOSTS                                            ADDRESS          PORTS     AGE
-colors      ingress.networking.k8s.io/colors-colors-demo-app   traefik   colors.project-x.sbx.vighsandor.az.cubix-pe.hu   172.130.16.222   80, 443   63s
-
-NAMESPACE   NAME                                        READY   AGE
-            clusterissuer.cert-manager.io/letsencrypt   True    68s
-
-NAMESPACE            NAME                                                            TYPE                            DATA   AGE
-cert-manager         secret/cert-manager-webhook-ca                                  Opaque                          3      91s
-cert-manager         secret/letsencrypt-account-key                                  Opaque                          1      69s
-cert-manager         secret/sh.helm.release.v1.cert-manager.v1                       helm.sh/release.v1              1      100s
-colors               secret/blue-tls                                                 kubernetes.io/tls               2      10s
-colors               secret/sh.helm.release.v1.colors.v1                             helm.sh/release.v1              1      64s
-external-dns         secret/external-dns                                             Opaque                          1      2m2s
-external-dns         secret/sh.helm.release.v1.external-dns.v1                       helm.sh/release.v1              1      2m3s
-ingress-controller   secret/sh.helm.release.v1.traefik.v1                            helm.sh/release.v1              1      2m34s
-kube-system          secret/azure-wi-webhook-server-cert                             Opaque                          3      5m53s
-kube-system          secret/bootstrap-token-rsffxs                                   bootstrap.kubernetes.io/token   4      5m40s
-kube-system          secret/konnectivity-certs                                       Opaque                          3      4m35s
-kube-system          secret/sh.helm.release.v1.aks-managed-overlay-upgrade-data.v4   helm.sh/release.v1              1      2m29s
-kube-system          secret/sh.helm.release.v1.aks-managed-overlay-upgrade-data.v5   helm.sh/release.v1              1      24s
-kube-system          secret/sh.helm.release.v1.aks-managed-workload-identity.v2      helm.sh/release.v1              1      3m33s
-kube-system          secret/sh.helm.release.v1.aks-managed-workload-identity.v3      helm.sh/release.v1              1      113s
-
-NAMESPACE   NAME                           STATUS   AGE
-            namespace/cert-manager         Active   100s
-            namespace/colors               Active   65s
-            namespace/default              Active   6m15s
-            namespace/external-dns         Active   2m3s
-            namespace/ingress-controller   Active   2m35s
-            namespace/kube-node-lease      Active   6m15s
-            namespace/kube-public          Active   6m15s
-            namespace/kube-system          Active   6m15s
-ClientId                              IsolationScope    Location       Name                       PrincipalId                           ResourceGroup            TenantId
-------------------------------------  ----------------  -------------  -------------------------  ------------------------------------  -----------------------  ------------------------------------
-35c90641-7ded-4d2d-8974-3e841b526156  None              swedencentral  project-x-sbx-aks          420013ba-7f4a-48cb-bf05-668a669c6c8d  project-x-sbx-aks        c9b482b1-d17b-430e-bbe6-5d64ba800aa1
-3e203fbd-4a47-43a0-9919-8fbe5437cf32  None              swedencentral  project-x-sbx-externaldns  d086277a-33a7-47ad-bc70-ff1b06ac6ac8  project-x-sbx-aks        c9b482b1-d17b-430e-bbe6-5d64ba800aa1
-0d2b4508-25fc-4d3f-b717-d98b4a34665c  None              swedencentral  project-x-sbx-agentpool    aeb94da5-b4cd-4a32-b48f-47c7b09c6df4  project-x-sbx-aks-nodes  c9b482b1-d17b-430e-bbe6-5d64ba800aa1
-Issuer                                                                                                                   Name          ResourceGroup      Subject
------------------------------------------------------------------------------------------------------------------------  ------------  -----------------  -----------------------------------------------
-https://swedencentral.oic.prod-aks.azure.com/c9b482b1-d17b-430e-bbe6-5d64ba800aa1/8db7a424-c2cc-487b-bda4-49a81bcafa92/  external-dns  project-x-sbx-aks  system:serviceaccount:external-dns:external-dns
-CreatedDateTime       Description                                DisplayName                    IsAssignableToRole    MailEnabled    MailNickname    RenewedDateTime       SecurityEnabled    SecurityIdentifier
---------------------  -----------------------------------------  -----------------------------  --------------------  -------------  --------------  --------------------  -----------------  --------------------------------------------------
-2026-11-09T15:42:28Z  project-x sbx környezet fejlesztői (írás)  project-x-sbx-developers       False                 False          01d98f81-9      2026-11-09T15:42:28Z  True               S-1-12-1-86427182-1204094678-1165799335-3560982494
-2026-11-09T15:42:28Z  project-x sbx környezet platformadminjai   project-x-sbx-platform-admins  False                 False          a4355f88-b      2026-11-09T15:42:28Z  True               S-1-12-1-1803399906-1219421779-371626414-465318757
-Principal                                                                       Role                                         Scope
-------------------------------------------------------------------------------  -------------------------------------------  --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-platformengineer_vighsandor.hu#EXT#@platformengineervighsandor.onmicrosoft.com  Owner                                        /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449
-platformengineer_vighsandor.hu#EXT#@platformengineervighsandor.onmicrosoft.com  Storage Blob Data Contributor                /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/course-baseline/providers/Microsoft.Storage/storageAccounts/platencbvighsandor
-3e203fbd-4a47-43a0-9919-8fbe5437cf32                                            DNS Zone Contributor                         /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-sbx-dns/providers/Microsoft.Network/dnsZones/project-x.sbx.vighsandor.az.cubix-pe.hu
-35c90641-7ded-4d2d-8974-3e841b526156                                            Network Contributor                          /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-sbx-aks/providers/Microsoft.Network/virtualNetworks/project-x-sbx-network/subnets/project-x-sbx-aks-nodes
-35c90641-7ded-4d2d-8974-3e841b526156                                            Contributor                                  /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-sbx-aks-nodes
-project-x-sbx-developers                                                        Azure Kubernetes Service Cluster User Role   /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-sbx-aks/providers/Microsoft.ContainerService/managedClusters/project-x-sbx
-project-x-sbx-platform-admins                                                   Azure Kubernetes Service RBAC Cluster Admin  /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-sbx-aks/providers/Microsoft.ContainerService/managedClusters/project-x-sbx
-project-x-sbx-developers                                                        Azure Kubernetes Service RBAC Writer         /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-sbx-aks/providers/Microsoft.ContainerService/managedClusters/project-x-sbx
-project-x-sbx-platform-admins                                                   Azure Kubernetes Service Cluster User Role   /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-sbx-aks/providers/Microsoft.ContainerService/managedClusters/project-x-sbx
-data.azurerm_client_config.current
-data.azurerm_dns_zone.parent
-azuread_group.developers
-azuread_group.platform_admins
-azuread_group_member.platform_admins["2477da76-ba77-4008-8ac9-9bda97840fa2"]
-azurerm_dns_ns_record.delegation
-azurerm_dns_zone.env
-azurerm_federated_identity_credential.external_dns
-azurerm_kubernetes_cluster.aks
-azurerm_resource_group.aks
-azurerm_resource_group.dns
-azurerm_role_assignment.aks["developers-cluster_user"]
-azurerm_role_assignment.aks["developers-writer"]
-azurerm_role_assignment.aks["platform_admins-cluster_admin"]
-azurerm_role_assignment.aks["platform_admins-cluster_user"]
-azurerm_role_assignment.aks_subnet_network_contributor
-azurerm_role_assignment.external_dns_zone_contributor
-azurerm_subnet.aks_nodes
-azurerm_user_assigned_identity.aks
-azurerm_user_assigned_identity.external_dns
-azurerm_virtual_network.aks
-```
-<!-- /KIMENET -->
-
-### C.2 `project-x-sbx` – curl
-
-<!-- KIMENET:curl-sbx.txt -->
-```
-$ curl -sk https://colors.project-x.sbx.vighsandor.az.cubix-pe.hu
-<!DOCTYPE html>
-<html>
-  <head>
-    <title>Rollouts Demo</title>
-    <link rel="stylesheet" href="style.css" type="text/css" />
-  </head>
-  <body>
-    <div class="header spread">
-        <img src="logo.png" class="logo" />
-        <h1>ARGO ROLLOUTS <span class="orange">DEMO</span></h1>
-        <div class="flex">
-          <div class="button button--resize" id="resize">FIT</div>
-        </div>
-    </div>
-    <div class="controls">
-      <div class="control spread">
-        <div>COLOR</div>
-        <div class="colors" id="colors"></div>
-      </div>
-      <div class="control spread">
-        <div class="button button--start">START</div>
-        <div class="button button--stop">STOP</div>
-      </div>
-      <div class="control">
-        <div class="control spread">
-          <div>LATENCY</div>
-          <div class="white" id="latency-label">0.0s</div>
-        </div>
-        <input type="range" min="0" max="5" value="0" class="slider" id="latency" step="0.1">
-      </div>
-      <div class="control">
-        <div class="control spread">
-          <div>ERROR</div>
-          <div class="white" id="error-label">0.0s</div>
-        </div>
-        <input type="range" min="0" max="100" value="0" class="slider" id="error" step="1">
-      </div>
-    </div>
-    <div id="grid" class="grid"></div>
-    <div id="graph" class="graph"></div>
-  </body>
-  <script src="main.js"></script>
-</html>
-```
-<!-- /KIMENET -->
-
-### C.3 `project-x-dev` – segédscript
-
-<!-- KIMENET:segedscript-kimenet-dev.txt -->
-```
-Name                     Location       Status
------------------------  -------------  ---------
-azure-signup-rg          eastus         Succeeded
-course-baseline          swedencentral  Succeeded
-NetworkWatcherRG         swedencentral  Succeeded
-project-x-sbx-aks        swedencentral  Succeeded
-project-x-sbx-dns        swedencentral  Succeeded
-project-x-sbx-aks-nodes  swedencentral  Succeeded
-project-x-dev-aks        swedencentral  Succeeded
-project-x-dev-dns        swedencentral  Succeeded
-project-x-dev-aks-nodes  swedencentral  Succeeded
-Name           Location       ResourceGroup      KubernetesVersion    CurrentKubernetesVersion    ProvisioningState    Fqdn
--------------  -------------  -----------------  -------------------  --------------------------  -------------------  ------------------------------------------------------
-project-x-sbx  swedencentral  project-x-sbx-aks  1.36.3               1.36.3                      Succeeded            project-x-sbx-dns-oh1ja1vx.hcp.swedencentral.azmk8s.io
-project-x-dev  swedencentral  project-x-dev-aks  1.36.3               1.36.3                      Succeeded            project-x-dev-dns-oi5ixgan.hcp.swedencentral.azmk8s.io
-
-[
-  {
-    "etag": "77f79121-66ee-4cf4-ad20-4d9909197616",
-    "id": "/subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/course-baseline/providers/Microsoft.Network/dnszones/vighsandor.az.cubix-pe.hu",
-    "location": "global",
-    "maxNumberOfRecordSets": 10000,
-    "name": "vighsandor.az.cubix-pe.hu",
-    "nameServers": [
-      "ns1-05.azure-dns.com.",
-      "ns2-05.azure-dns.net.",
-      "ns3-05.azure-dns.org.",
-      "ns4-05.azure-dns.info."
-    ],
-    "numberOfRecordSets": 4,
-    "resourceGroup": "course-baseline",
-    "tags": {},
-    "type": "Microsoft.Network/dnszones",
-    "zoneType": "Public"
-  },
-  {
-    "etag": "70e6a005-d9dc-4713-87c4-39ea95e520ef",
-    "id": "/subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-dev-dns/providers/Microsoft.Network/dnszones/project-x.dev.vighsandor.az.cubix-pe.hu",
-    "location": "global",
-    "maxNumberOfRecordSets": 10000,
-    "name": "project-x.dev.vighsandor.az.cubix-pe.hu",
-    "nameServers": [
-      "ns1-08.azure-dns.com.",
-      "ns2-08.azure-dns.net.",
-      "ns3-08.azure-dns.org.",
-      "ns4-08.azure-dns.info."
-    ],
-    "numberOfRecordSets": 4,
-    "resourceGroup": "project-x-dev-dns",
-    "tags": {
-      "environment": "dev",
-      "expires": "2027-02-09",
-      "managed_by": "terraform",
-      "owner": "platformengineer@vighsandor.hu",
-      "project": "project-x"
-    },
-    "type": "Microsoft.Network/dnszones",
-    "zoneType": "Public"
-  },
-  {
-    "etag": "4f23eb65-0510-4d53-9dd9-b9c6d2271e45",
-    "id": "/subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-sbx-dns/providers/Microsoft.Network/dnszones/project-x.sbx.vighsandor.az.cubix-pe.hu",
-    "location": "global",
-    "maxNumberOfRecordSets": 10000,
-    "name": "project-x.sbx.vighsandor.az.cubix-pe.hu",
-    "nameServers": [
-      "ns1-09.azure-dns.com.",
-      "ns2-09.azure-dns.net.",
-      "ns3-09.azure-dns.org.",
-      "ns4-09.azure-dns.info."
-    ],
-    "numberOfRecordSets": 4,
-    "resourceGroup": "project-x-sbx-dns",
-    "tags": {
-      "environment": "sbx",
-      "expires": "2027-02-09",
-      "managed_by": "terraform",
-      "owner": "platformengineer@vighsandor.hu",
-      "project": "project-x"
-    },
-    "type": "Microsoft.Network/dnszones",
-    "zoneType": "Public"
-  }
-]
-TTL     Fqdn                                               Name      ProvisioningState    ResourceGroup
-------  -------------------------------------------------  --------  -------------------  -----------------
-172800  project-x.dev.vighsandor.az.cubix-pe.hu.           @         Succeeded            project-x-dev-dns
-3600    project-x.dev.vighsandor.az.cubix-pe.hu.           @         Succeeded            project-x-dev-dns
-300     a-colors.project-x.dev.vighsandor.az.cubix-pe.hu.  a-colors  Succeeded            project-x-dev-dns
-300     colors.project-x.dev.vighsandor.az.cubix-pe.hu.    colors    Succeeded            project-x-dev-dns
-NAMESPACE            NAME                                                     READY   STATUS    RESTARTS      AGE
-cert-manager         pod/cert-manager-687c8dcfbb-lvpd5                        1/1     Running   0             94s
-cert-manager         pod/cert-manager-cainjector-5bfdf76ddd-64wdn             1/1     Running   0             94s
-cert-manager         pod/cert-manager-webhook-578b8cbb44-wzjpl                1/1     Running   0             94s
-colors               pod/colors-colors-demo-app-5ffff85675-4jzvl              1/1     Running   0             66s
-external-dns         pod/external-dns-6d6975cf79-tz4z9                        1/1     Running   0             119s
-ingress-controller   pod/traefik-68895f75cb-crz2s                             1/1     Running   0             2m28s
-kube-system          pod/azure-cns-z65l2                                      2/2     Running   0             21m
-kube-system          pod/azure-ip-masq-agent-ct8wv                            1/1     Running   0             21m
-kube-system          pod/azure-wi-webhook-controller-manager-bd689794-bvtwl   1/1     Running   1 (20m ago)   21m
-kube-system          pod/azure-wi-webhook-controller-manager-bd689794-ntsmm   1/1     Running   1 (20m ago)   21m
-kube-system          pod/cloud-node-manager-j5m4d                             1/1     Running   0             21m
-kube-system          pod/coredns-5bf45f87d-l97mx                              1/1     Running   0             20m
-kube-system          pod/coredns-5bf45f87d-p24k8                              1/1     Running   0             21m
-kube-system          pod/coredns-autoscaler-7467554f77-mkhx2                  1/1     Running   0             21m
-kube-system          pod/csi-azuredisk-node-wm895                             3/3     Running   0             21m
-kube-system          pod/csi-azurefile-node-88rxz                             4/4     Running   0             21m
-kube-system          pod/konnectivity-agent-autoscaler-5b658f6697-cjbrc       1/1     Running   0             21m
-kube-system          pod/konnectivity-agent-c786bd659-8jn46                   1/1     Running   0             21m
-kube-system          pod/konnectivity-agent-c786bd659-v48xc                   1/1     Running   0             20m
-kube-system          pod/kube-proxy-25597                                     1/1     Running   0             21m
-kube-system          pod/metrics-server-dff79fd46-8qwrd                       2/2     Running   0             20m
-kube-system          pod/metrics-server-dff79fd46-qltsf                       2/2     Running   0             20m
-
-NAMESPACE   NAME                                               CLASS     HOSTS                                            ADDRESS          PORTS     AGE
-colors      ingress.networking.k8s.io/colors-colors-demo-app   traefik   colors.project-x.dev.vighsandor.az.cubix-pe.hu   74.241.212.140   80, 443   67s
-
-NAMESPACE   NAME                                        READY   AGE
-            clusterissuer.cert-manager.io/letsencrypt   True    71s
-
-NAMESPACE            NAME                                                             TYPE                            DATA   AGE
-cert-manager         secret/cert-manager-webhook-ca                                   Opaque                          3      91s
-cert-manager         secret/letsencrypt-account-key                                   Opaque                          1      71s
-cert-manager         secret/sh.helm.release.v1.cert-manager.v1                        helm.sh/release.v1              1      98s
-colors               secret/blue-tls                                                  kubernetes.io/tls               2      10s
-colors               secret/sh.helm.release.v1.colors.v1                              helm.sh/release.v1              1      67s
-external-dns         secret/external-dns                                              Opaque                          1      2m1s
-external-dns         secret/sh.helm.release.v1.external-dns.v1                        helm.sh/release.v1              1      2m1s
-ingress-controller   secret/sh.helm.release.v1.traefik.v1                             helm.sh/release.v1              1      2m31s
-kube-system          secret/azure-wi-webhook-server-cert                              Opaque                          3      23m
-kube-system          secret/bootstrap-token-3is5wl                                    bootstrap.kubernetes.io/token   4      23m
-kube-system          secret/konnectivity-certs                                        Opaque                          3      21m
-kube-system          secret/sh.helm.release.v1.aks-managed-overlay-upgrade-data.v12   helm.sh/release.v1              1      2m59s
-kube-system          secret/sh.helm.release.v1.aks-managed-overlay-upgrade-data.v13   helm.sh/release.v1              1      53s
-kube-system          secret/sh.helm.release.v1.aks-managed-workload-identity.v11      helm.sh/release.v1              1      2m26s
-kube-system          secret/sh.helm.release.v1.aks-managed-workload-identity.v12      helm.sh/release.v1              1      18s
-
-NAMESPACE   NAME                           STATUS   AGE
-            namespace/cert-manager         Active   99s
-            namespace/colors               Active   68s
-            namespace/default              Active   24m
-            namespace/external-dns         Active   2m1s
-            namespace/ingress-controller   Active   2m32s
-            namespace/kube-node-lease      Active   24m
-            namespace/kube-public          Active   24m
-            namespace/kube-system          Active   24m
-ClientId                              IsolationScope    Location       Name                       PrincipalId                           ResourceGroup            TenantId
-------------------------------------  ----------------  -------------  -------------------------  ------------------------------------  -----------------------  ------------------------------------
-35c90641-7ded-4d2d-8974-3e841b526156  None              swedencentral  project-x-sbx-aks          420013ba-7f4a-48cb-bf05-668a669c6c8d  project-x-sbx-aks        c9b482b1-d17b-430e-bbe6-5d64ba800aa1
-3e203fbd-4a47-43a0-9919-8fbe5437cf32  None              swedencentral  project-x-sbx-externaldns  d086277a-33a7-47ad-bc70-ff1b06ac6ac8  project-x-sbx-aks        c9b482b1-d17b-430e-bbe6-5d64ba800aa1
-0d2b4508-25fc-4d3f-b717-d98b4a34665c  None              swedencentral  project-x-sbx-agentpool    aeb94da5-b4cd-4a32-b48f-47c7b09c6df4  project-x-sbx-aks-nodes  c9b482b1-d17b-430e-bbe6-5d64ba800aa1
-de709159-3478-4e02-88a9-1b516a1f669d  None              swedencentral  project-x-dev-aks          11b6d0a6-17f0-4241-a8ce-a9d5e366238b  project-x-dev-aks        c9b482b1-d17b-430e-bbe6-5d64ba800aa1
-9b00496c-b4b4-403c-9a32-43a45d878f5f  None              swedencentral  project-x-dev-externaldns  c2758c6d-8863-4dd0-a8ef-bd1e106f1e11  project-x-dev-aks        c9b482b1-d17b-430e-bbe6-5d64ba800aa1
-9e2a67e7-1f0d-4d24-9eba-bee92cfd32ae  None              swedencentral  project-x-dev-agentpool    802633d8-e226-4891-b16a-b3fd844bc5eb  project-x-dev-aks-nodes  c9b482b1-d17b-430e-bbe6-5d64ba800aa1
-Issuer                                                                                                                   Name          ResourceGroup      Subject
------------------------------------------------------------------------------------------------------------------------  ------------  -----------------  -----------------------------------------------
-https://swedencentral.oic.prod-aks.azure.com/c9b482b1-d17b-430e-bbe6-5d64ba800aa1/4ec9e5b2-d21f-42a4-9804-c3a9a0772290/  external-dns  project-x-dev-aks  system:serviceaccount:external-dns:external-dns
-CreatedDateTime       Description                                DisplayName                    IsAssignableToRole    MailEnabled    MailNickname    RenewedDateTime       SecurityEnabled    SecurityIdentifier
---------------------  -----------------------------------------  -----------------------------  --------------------  -------------  --------------  --------------------  -----------------  ----------------------------------------------------
-2026-11-09T15:42:28Z  project-x sbx környezet fejlesztői (írás)  project-x-sbx-developers       False                 False          01d98f81-9      2026-11-09T15:42:28Z  True               S-1-12-1-86427182-1204094678-1165799335-3560982494
-2026-11-09T15:42:28Z  project-x sbx környezet platformadminjai   project-x-sbx-platform-admins  False                 False          a4355f88-b      2026-11-09T15:42:28Z  True               S-1-12-1-1803399906-1219421779-371626414-465318757
-2026-11-09T15:53:18Z  project-x dev környezet fejlesztői (írás)  project-x-dev-developers       False                 False          5d052b26-d      2026-11-09T15:53:18Z  True               S-1-12-1-2073888591-1300772916-3077791149-591231089
-2026-11-09T15:53:17Z  project-x dev környezet platformadminjai   project-x-dev-platform-admins  False                 False          db190256-f      2026-11-09T15:53:17Z  True               S-1-12-1-3475882151-1195152490-3267294895-1156141564
-Principal                                                                       Role                                         Scope
-------------------------------------------------------------------------------  -------------------------------------------  --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-platformengineer_vighsandor.hu#EXT#@platformengineervighsandor.onmicrosoft.com  Owner                                        /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449
-platformengineer_vighsandor.hu#EXT#@platformengineervighsandor.onmicrosoft.com  Storage Blob Data Contributor                /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/course-baseline/providers/Microsoft.Storage/storageAccounts/platencbvighsandor
-3e203fbd-4a47-43a0-9919-8fbe5437cf32                                            DNS Zone Contributor                         /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-sbx-dns/providers/Microsoft.Network/dnsZones/project-x.sbx.vighsandor.az.cubix-pe.hu
-35c90641-7ded-4d2d-8974-3e841b526156                                            Network Contributor                          /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-sbx-aks/providers/Microsoft.Network/virtualNetworks/project-x-sbx-network/subnets/project-x-sbx-aks-nodes
-35c90641-7ded-4d2d-8974-3e841b526156                                            Contributor                                  /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-sbx-aks-nodes
-project-x-sbx-developers                                                        Azure Kubernetes Service Cluster User Role   /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-sbx-aks/providers/Microsoft.ContainerService/managedClusters/project-x-sbx
-project-x-sbx-platform-admins                                                   Azure Kubernetes Service RBAC Cluster Admin  /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-sbx-aks/providers/Microsoft.ContainerService/managedClusters/project-x-sbx
-project-x-sbx-developers                                                        Azure Kubernetes Service RBAC Writer         /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-sbx-aks/providers/Microsoft.ContainerService/managedClusters/project-x-sbx
-project-x-sbx-platform-admins                                                   Azure Kubernetes Service Cluster User Role   /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-sbx-aks/providers/Microsoft.ContainerService/managedClusters/project-x-sbx
-de709159-3478-4e02-88a9-1b516a1f669d                                            Network Contributor                          /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-dev-aks/providers/Microsoft.Network/virtualNetworks/project-x-dev-network/subnets/project-x-dev-aks-nodes
-9b00496c-b4b4-403c-9a32-43a45d878f5f                                            DNS Zone Contributor                         /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-dev-dns/providers/Microsoft.Network/dnsZones/project-x.dev.vighsandor.az.cubix-pe.hu
-de709159-3478-4e02-88a9-1b516a1f669d                                            Contributor                                  /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-dev-aks-nodes
-project-x-dev-developers                                                        Azure Kubernetes Service Cluster User Role   /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-dev-aks/providers/Microsoft.ContainerService/managedClusters/project-x-dev
-project-x-dev-platform-admins                                                   Azure Kubernetes Service Cluster User Role   /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-dev-aks/providers/Microsoft.ContainerService/managedClusters/project-x-dev
-project-x-dev-developers                                                        Azure Kubernetes Service RBAC Writer         /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-dev-aks/providers/Microsoft.ContainerService/managedClusters/project-x-dev
-project-x-dev-platform-admins                                                   Azure Kubernetes Service RBAC Cluster Admin  /subscriptions/a6d917d9-aa3b-4f2e-bdbc-d249a8fb8449/resourceGroups/project-x-dev-aks/providers/Microsoft.ContainerService/managedClusters/project-x-dev
-data.azurerm_client_config.current
-data.azurerm_dns_zone.parent
-azuread_group.developers
-azuread_group.platform_admins
-azuread_group_member.platform_admins["2477da76-ba77-4008-8ac9-9bda97840fa2"]
-azurerm_dns_ns_record.delegation
-azurerm_dns_zone.env
-azurerm_federated_identity_credential.external_dns
-azurerm_kubernetes_cluster.aks
-azurerm_resource_group.aks
-azurerm_resource_group.dns
-azurerm_role_assignment.aks["developers-cluster_user"]
-azurerm_role_assignment.aks["developers-writer"]
-azurerm_role_assignment.aks["platform_admins-cluster_admin"]
-azurerm_role_assignment.aks["platform_admins-cluster_user"]
-azurerm_role_assignment.aks_subnet_network_contributor
-azurerm_role_assignment.external_dns_zone_contributor
-azurerm_subnet.aks_nodes
-azurerm_user_assigned_identity.aks
-azurerm_user_assigned_identity.external_dns
-azurerm_virtual_network.aks
-```
-<!-- /KIMENET -->
-
-### C.4 `project-x-dev` – curl
-
-<!-- KIMENET:curl-dev.txt -->
-```
-$ curl -sk https://colors.project-x.dev.vighsandor.az.cubix-pe.hu
-(nincs válasz – DNS-gyorsítótár? Próbáld újra pár perc múlva.)
-```
-A hibát még nem találtam meg de a cluster elemeii futnak, így nem ott keresem:
-
-```
-kubectl get po -A
-NAMESPACE            NAME                                                 READY   STATUS    RESTARTS      AGE
-cert-manager         cert-manager-687c8dcfbb-lvpd5                        1/1     Running   0             8m12s
-cert-manager         cert-manager-cainjector-5bfdf76ddd-64wdn             1/1     Running   0             8m12s
-cert-manager         cert-manager-webhook-578b8cbb44-wzjpl                1/1     Running   0             8m12s
-colors               colors-colors-demo-app-5ffff85675-4jzvl              1/1     Running   0             7m44s
-external-dns         external-dns-6d6975cf79-tz4z9                        1/1     Running   0             8m37s
-ingress-controller   traefik-68895f75cb-crz2s                             1/1     Running   0             9m6s
-kube-system          azure-cns-z65l2                                      2/2     Running   0             28m
-kube-system          azure-ip-masq-agent-ct8wv                            1/1     Running   0             28m
-kube-system          azure-wi-webhook-controller-manager-bd689794-bvtwl   1/1     Running   1 (27m ago)   28m
-kube-system          azure-wi-webhook-controller-manager-bd689794-ntsmm   1/1     Running   1 (27m ago)   28m
-kube-system          cloud-node-manager-j5m4d                             1/1     Running   0             28m
-kube-system          coredns-5bf45f87d-l97mx                              1/1     Running   0             27m
-kube-system          coredns-5bf45f87d-p24k8                              1/1     Running   0             28m
-kube-system          coredns-autoscaler-7467554f77-mkhx2                  1/1     Running   0             28m
-kube-system          csi-azuredisk-node-wm895                             3/3     Running   0             28m
-kube-system          csi-azurefile-node-88rxz                             4/4     Running   0             28m
-kube-system          konnectivity-agent-5f9946665-552gm                   1/1     Running   0             92s
-kube-system          konnectivity-agent-5f9946665-57lp6                   1/1     Running   0             93s
-kube-system          konnectivity-agent-autoscaler-5b658f6697-cjbrc       1/1     Running   0             28m
-kube-system          kube-proxy-25597                                     1/1     Running   0             28m
-kube-system          metrics-server-dff79fd46-8qwrd                       2/2     Running   0             27m
-kube-system          metrics-server-dff79fd46-qltsf                       2/2     Running   0             27m
-
-kubectl get ingress -A
-NAMESPACE   NAME                     CLASS     HOSTS                                            ADDRESS          PORTS     AGE
-colors      colors-colors-demo-app   traefik   colors.project-x.dev.vighsandor.az.cubix-pe.hu   74.241.212.140   80, 443   8m3s
-```
-
-<!-- /KIMENET -->

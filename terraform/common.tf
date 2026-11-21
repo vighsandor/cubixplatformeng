@@ -1,5 +1,5 @@
 # -----------------------------------------------------------------------------
-# Közös bemenetek, származtatott értékek és adatforrások
+# Közös bemenetek, származtatott értékek, adatforrások és a workspace-védelem
 # -----------------------------------------------------------------------------
 
 variable "project_name" {
@@ -8,7 +8,7 @@ variable "project_name" {
 }
 
 variable "env_name" {
-  description = "A környezet rövid jele (sbx, dev, test)."
+  description = "A környezet rövid jele (sbx, dev, test). Egyeznie kell a Terraform workspace nevével."
   type        = string
 }
 
@@ -41,6 +41,17 @@ locals {
   }
 }
 
-# Annak az identitásnak az adatai, amelynek a nevében a Terraform fut
-# (helyi futtatásnál: a bejelentkezett felhasználó).
 data "azurerm_client_config" "current" {}
+
+# Biztonsági zár: a dev változókkal nem lehet a sandbox workspace-ében
+# futtatni (és fordítva), mert az a másik környezetet írná át.
+resource "terraform_data" "workspace_guard" {
+  input = var.env_name
+
+  lifecycle {
+    precondition {
+      condition     = terraform.workspace == var.env_name
+      error_message = "A workspace (${terraform.workspace}) nem egyezik a környezettel (${var.env_name}). Futtasd: terraform workspace select -or-create ${var.env_name}"
+    }
+  }
+}

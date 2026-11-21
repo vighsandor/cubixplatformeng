@@ -1,0 +1,175 @@
+# =============================================================================
+# Terraform – plan pull requestre, apply a fő ágra (platformeng-w3) kerüléskor
+#
+# Környezetek: a terraform/environments/*.tfvars fájlok. Minden fájl egy
+# környezet (= Terraform workspace); új környezet igénylése = egy új tfvars
+# fájl pull requestben. A plan és az apply környezetenként, mátrixban fut.
+# =============================================================================
+name: Terraform
+
+on:
+  pull_request:
+    branches: [platformeng-w3]
+  push:
+    branches: [platformeng-w3]
+  workflow_dispatch:
+
+permissions:
+  id-token: write # OIDC token az Azure-bejelentkezéshez (workload identity federation)
+  contents: read
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+defaults:
+  run:
+    working-directory: terraform
+
+jobs:
+  environments:
+    name: Környezetek
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.list.outputs.list }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: list
+        name: Környezetek listája (environments/*.tfvars)
+        run: |
+          list=$(find environments -maxdepth 1 -name '*.tfvars' -printf '%f\n' | sed 's/\.tfvars$//' | sort | jq -R . | jq -cs .)
+          echo "Környezetek: $list"
+          echo "list=$list" >> "$GITHUB_OUTPUT"
+
+  plan:
+    name: Terraform Plan (${{ matrix.env }})
+    needs: environments
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: ${{ fromJSON(needs.environments.outputs.list) }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Install Azure kubelogin
+        uses: azure/use-kubelogin@v1
+        with:
+          kubelogin-version: latest
+
+      - name: Terraform fmt
+        run: terraform fmt -check -recursive
+
+      - name: Terraform init
+        run: terraform init
+
+      - name: Terraform workspace (${{ matrix.env }})
+        run: terraform workspace select -or-create ${{ matrix.env }}
+
+      - name: Terraform validate
+        run: terraform validate
+
+      - name: Terraform plan
+        run: |
+          terraform plan -lock-timeout=10m -var-file=environments/${{ matrix.env }}.tfvars -out=tfplan
+          {
+            echo "## Terraform plan – ${{ matrix.env }}"
+            echo '```'
+            terraform show -no-color tfplan | grep -E '^\s*# |^Plan:|^No changes' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Plan csomagolása az apply-hoz
+        run: tar -czf ../terraform-plan-${{ matrix.env }}.tar.gz tfplan .terraform.lock.hcl
+
+      - name: Plan feltöltése
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-${{ matrix.env }}
+          path: terraform-plan-${{ matrix.env }}.tar.gz
+          retention-days: 1
+
+  # Egyetlen, állandó nevű ellenőrzés a rulesethez: a mátrix-jobok neve
+  # környezetenként más, a kötelező check viszont csak fix név lehet.
+  plan-result:
+    name: Terraform Plan
+    needs: plan
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Minden környezet plan-je sikeres?
+        working-directory: .
+        run: |
+          echo "plan eredménye: ${{ needs.plan.result }}"
+          test "${{ needs.plan.result }}" = "success"
+
+  apply:
+    name: Terraform Apply (${{ matrix.env }})
+    needs: [environments, plan-result]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/platformeng-w3'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: ${{ fromJSON(needs.environments.outputs.list) }}
+    concurrency:
+      group: terraform-apply-${{ matrix.env }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Install Azure kubelogin
+        uses: azure/use-kubelogin@v1
+        with:
+          kubelogin-version: latest
+
+      - name: Plan letöltése
+        uses: actions/download-artifact@v5
+        with:
+          name: terraform-plan-${{ matrix.env }}
+          path: .
+
+      - name: Plan kicsomagolása
+        run: tar -xzf ../terraform-plan-${{ matrix.env }}.tar.gz
+
+      - name: Terraform init
+        run: terraform init
+
+      - name: Terraform workspace (${{ matrix.env }})
+        run: terraform workspace select ${{ matrix.env }}
+
+      - name: Terraform apply (pontosan a jóváhagyott plan)
+        run: terraform apply -lock-timeout=10m tfplan
+
+      - name: Kimenetek
+        run: |
+          {
+            echo "## Terraform apply – ${{ matrix.env }}"
+            echo '```'
+            terraform output
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
