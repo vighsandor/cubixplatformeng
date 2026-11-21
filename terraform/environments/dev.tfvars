@@ -5,7 +5,7 @@
 
 project_name = "project-x"
 env_name     = "dev"
-expires      = "2027-02-21"
+expires      = "2027-03-21"
 
 # Hálózat: környezetenként saját, át nem fedő /12
 vnet_address_space = "10.240.0.0/12"
