@@ -66,6 +66,9 @@ jobs:
 
       - name: Install Azure kubelogin
         uses: azure/use-kubelogin@v1
+        env:
+          # a 'latest' feloldásához a GitHub API-t hívja, ehhez token kell
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           kubelogin-version: latest
 
@@ -144,6 +147,9 @@ jobs:
 
       - name: Install Azure kubelogin
         uses: azure/use-kubelogin@v1
+        env:
+          # a 'latest' feloldásához a GitHub API-t hívja, ehhez token kell
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           kubelogin-version: latest
 
