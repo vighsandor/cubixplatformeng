@@ -50,6 +50,13 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: AKS-token előtöltése a kubeloginnak
+        # A GitHub OIDC-token csak néhány percig érvényes. Az Azure CLI-nek az
+        # AKS (Entra ID server app) scope-ra most kell tokent kérnie, különben a
+        # hosszú AKS-létrehozás után a kubelogin már lejárt tokennel próbálkozna.
+        # A token kb. 60-90 percig érvényes, és az Azure CLI gyorsítótárából adja.
+        run: az account get-access-token --resource 6dae42f8-4368-4678-94ff-3960e28e3630 --query expiresOn -o tsv
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
