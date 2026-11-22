@@ -69,9 +69,13 @@ resource "azuread_application" "argocd" {
   }
 }
 
+# Az Entra ID-alkalmazás példánya a tenantban (Enterprise application).
+# Tulajdonost itt nem adok meg: a létrehozó (a pipeline identitása, Application
+# Developer szerepkörrel) automatikusan tulajdonos lesz. Ha a provider a
+# létrehozás után a tulajdonosokat módosítaná, ahhoz ez a szerepkör nem elég
+# (403 Authorization_RequestDenied).
 resource "azuread_service_principal" "argocd" {
   client_id = azuread_application.argocd.client_id
-  owners    = local.argocd_app_owners
 }
 
 resource "azuread_application_federated_identity_credential" "argocd" {
