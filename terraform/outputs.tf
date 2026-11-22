@@ -32,3 +32,18 @@ output "connect_commands" {
     kubelogin convert-kubeconfig -l azurecli
   EOT
 }
+
+output "argocd_url" {
+  description = "Az Argo CD felülete: belépés az Entra ID-fiókkal (LOG IN VIA ENTRA ID)."
+  value       = local.argocd_url
+}
+
+output "argocd_entra_app" {
+  description = "Az Argo CD Entra ID-alkalmazása (App registrations)."
+  value       = "${azuread_application.argocd.display_name} (client ID: ${azuread_application.argocd.client_id})"
+}
+
+output "request" {
+  description = "Az igénylés adatai (tfvars: request)."
+  value       = terraform_data.request.output
+}

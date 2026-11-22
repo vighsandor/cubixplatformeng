@@ -8,6 +8,15 @@ project_name = "<projekt>"   # kisbetű, szám, kötőjel; max. 15 karakter
 env_name     = "<env>"       # = a fájl neve, pl. dev
 expires      = "ÉÉÉÉ-HH-NN"  # lejárat, max. 3 hónap
 
+# Az igénylés adatai (kötelező; külön űrlap nincs, minden itt van)
+request = {
+  requester = "<a te UPN-ed>"                 # az igénylő Entra ID UPN-je
+  team      = "<csapat>"
+  reason    = "<mire kell a környezet, pár mondatban>"
+  approver  = "<költséghely / jóváhagyó vezető>"
+  # size_reason = "<csak egyedi méretnél: miért kell nagyobb gép / több node>"
+}
+
 # A platform engineer tölti ki (a következő szabad /12):
 vnet_address_space = "10.x.0.0/12"
 node_subnet_prefix = "10.x.0.0/24"
@@ -29,3 +38,4 @@ readers = {
 # Opcionális (csak indoklással):
 # node_vm_size = "Standard_D2as_v5"
 # node_count   = 1
+# argocd_admin_enabled = false   # az Argo CD helyi admin fiókja (vészhelyzetre)

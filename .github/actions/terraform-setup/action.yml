@@ -1,0 +1,49 @@
+# Közös előkészítés minden Terraform-jobhoz (plan, apply, destroy):
+# Azure-bejelentkezés titok nélkül (OIDC), AKS-token előtöltése, Terraform és
+# kubelogin telepítése. Egy helyen van, így a jobok nem ismétlik ugyanazt.
+name: Terraform előkészítés
+description: Azure-bejelentkezés (OIDC), AKS-token, Terraform, kubelogin
+
+inputs:
+  client-id:
+    description: AZURE_CLIENT_ID
+    required: true
+  tenant-id:
+    description: AZURE_TENANT_ID
+    required: true
+  subscription-id:
+    description: AZURE_SUBSCRIPTION_ID
+    required: true
+  github-token:
+    description: GITHUB_TOKEN (a kubelogin 'latest' verziójának feloldásához)
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Azure login (OIDC)
+      uses: azure/login@v2
+      with:
+        client-id: ${{ inputs.client-id }}
+        tenant-id: ${{ inputs.tenant-id }}
+        subscription-id: ${{ inputs.subscription-id }}
+
+    - name: AKS-token előtöltése a kubeloginnak
+      # A GitHub OIDC-token csak néhány percig érvényes. Az Azure CLI-nek az
+      # AKS (Entra ID server app) scope-ra most kell tokent kérnie, különben a
+      # hosszú AKS-létrehozás után a kubelogin már lejárt tokennel próbálkozna.
+      # A token kb. 60-90 percig érvényes, és az Azure CLI gyorsítótárából adja.
+      shell: bash
+      run: az account get-access-token --resource 6dae42f8-4368-4678-94ff-3960e28e3630 --query expiresOn -o tsv
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_wrapper: false
+
+    - name: Install Azure kubelogin
+      uses: azure/use-kubelogin@v1
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      with:
+        kubelogin-version: latest

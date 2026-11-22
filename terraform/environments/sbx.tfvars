@@ -1,11 +1,20 @@
 # =============================================================================
-# A(z) project-x sbx környezet bemenetei (igénylés: lásd a pull requestet)
+# A(z) project-x sbx környezet bemenetei (az igénylés adatai: request)
 # Workspace: sbx   –   a fájl neve, az env_name és a workspace neve egyezik
 # =============================================================================
 
 project_name = "project-x"
 env_name     = "sbx"
 expires      = "2027-02-21"
+
+# Az igénylés (a korábbi igénylőlap helyett: minden egy helyen, a Terraform
+# ellenőrzi és a state-ben is rögzíti – terraform_data.request)
+request = {
+  requester = "platformengineer_vighsandor.hu#EXT#@platformengineervighsandor.onmicrosoft.com"
+  team      = "Project X"
+  reason    = "Platform-sandbox: a platformváltozások itt élesednek először, a többi környezet csak ezután, jóváhagyással."
+  approver  = "Cubix Platform Engineering kurzus"
+}
 
 # Hálózat: környezetenként saját, át nem fedő /12
 vnet_address_space = "10.224.0.0/12"

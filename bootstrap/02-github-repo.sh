@@ -4,9 +4,12 @@
 #
 #   ./02-github-repo.sh secrets          – az Azure-bejelentkezés secretjei
 #   ./02-github-repo.sh default-branch   – a fő ág legyen az alapértelmezett
+#   ./02-github-repo.sh environments     – "promotion" environment: a sandbox
+#                                          utáni környezetek apply-ja csak
+#                                          jóváhagyással, csak a fő ágról
 #   ./02-github-repo.sh ruleset          – ágvédelem a fő ágon (az első sikeres
 #                                          pipeline-futás után kapcsold be!)
-#   ./02-github-repo.sh all              – mindhárom
+#   ./02-github-repo.sh all              – mind
 #
 # Előfeltétel: gh auth login (a repo adminjaként), az login.
 # =============================================================================
@@ -18,6 +21,7 @@ RG="course-baseline"
 IDENTITY="github-repos"
 RULESET_NAME="${BRANCH} – pull request + terraform plan"
 CHECK_NAME="Terraform Plan" # a terraform.yml plan-result jobjának neve
+GH_ENVIRONMENT="${GH_ENVIRONMENT:-promotion}"
 
 log() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 command -v gh >/dev/null || { echo "Hiányzik: gh (GitHub CLI) – https://cli.github.com"; exit 1; }
@@ -37,6 +41,33 @@ default_branch() {
   echo "A workflow_dispatch (pl. a Terraform destroy kézi indítása) csak az alapértelmezett ágon"
   echo "lévő workflow-kra működik, és a pull requestek is ezt kínálják fel célágnak."
   gh repo edit "$REPO" --default-branch "$BRANCH"
+}
+
+environments() {
+  log "GitHub environment: ${GH_ENVIRONMENT} (jóváhagyás a sandbox utáni környezetekhez)"
+  local me body
+  me=$(gh api user --jq .id)
+  body=$(jq -n --argjson me "$me" '{
+    wait_timer: 0,
+    prevent_self_review: false,
+    reviewers: [ { type: "User", id: $me } ],
+    deployment_branch_policy: { protected_branches: false, custom_branch_policies: true } }')
+  if ! gh api -X PUT "repos/${REPO}/environments/${GH_ENVIRONMENT}" --input - <<<"$body" >/dev/null; then
+    echo "  FIGYELEM: a kötelező jóváhagyó beállítása nem sikerült. Privát repónál ez a"
+    echo "  GitHub ingyenes csomagjában nem érhető el; ilyenkor az environment jóváhagyó"
+    echo "  nélkül jön létre (a sandbox utáni sorrend ettől még megmarad)."
+    gh api -X PUT "repos/${REPO}/environments/${GH_ENVIRONMENT}" \
+      -F 'deployment_branch_policy[protected_branches]=false' \
+      -F 'deployment_branch_policy[custom_branch_policies]=true' >/dev/null
+  fi
+  # Csak a fő ágról lehet ebbe az environmentbe telepíteni
+  if ! gh api "repos/${REPO}/environments/${GH_ENVIRONMENT}/deployment-branch-policies" \
+      --jq '.branch_policies[].name' | grep -qx "$BRANCH"; then
+    gh api -X POST "repos/${REPO}/environments/${GH_ENVIRONMENT}/deployment-branch-policies" \
+      -f name="$BRANCH" -f type=branch >/dev/null
+  fi
+  gh api "repos/${REPO}/environments/${GH_ENVIRONMENT}" \
+    --jq '"  jóváhagyók: \([.protection_rules[]? | select(.type=="required_reviewers") | .reviewers[].reviewer.login] | join(", ") | if . == "" then "nincs" else . end); ág: '"$BRANCH"'"'
 }
 
 ruleset() {
@@ -81,7 +112,8 @@ INFO
 case "${1:-}" in
   secrets) secrets ;;
   default-branch) default_branch ;;
+  environments) environments ;;
   ruleset) ruleset ;;
-  all) secrets; default_branch; ruleset ;;
-  *) sed -n '2,13p' "$0"; exit 1 ;;
+  all) secrets; default_branch; environments; ruleset ;;
+  *) sed -n '2,16p' "$0"; exit 1 ;;
 esac

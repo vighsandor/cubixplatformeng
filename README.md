@@ -1,37 +1,44 @@
 # Cubix Platform Engineering – Project X miniplatform
 
-**4. hét: GitHub Actions pipeline és teljes Terraform** (tag: `week4-pipeline-tf`, fő ág: `platformeng-w3`)
+**5. hét: Argo CD alapok** (tag: `week5-argocd-basics`, fő ág: `platformeng-w3`)
 
-A Project X fejlesztői pull requesttel igényelnek környezetet. A pipeline pull requestre `fmt` + `validate` + `plan` lépést futtat, a fő ágra merge után pedig `apply`-t. A Terraform az Azure- és Entra ID-erőforrások mellett a Kubernetesen belüli platformkomponenseket is telepíti (Traefik, External DNS, cert-manager, ClusterIssuer, demóalkalmazás). A környezetek egy kódból, Terraform workspace-ekkel és környezetenkénti `tfvars` fájlokkal jönnek létre.
+A Project X fejlesztői pull requesttel igényelnek környezetet. A GitHub Actions pipeline pull requestre `fmt` + `validate` + `plan` lépést futtat, a fő ágra merge után `apply`-t. A Terraform felépíti az Azure- és Entra ID-erőforrásokat, és telepíti az **Argo CD**-t. A Kubernetesen belüli komponenseket (Traefik, External DNS, cert-manager, ClusterIssuer, demóalkalmazás) a Terraform által létrehozott **Argo CD Application-ök** telepítik, és az Argo CD folyamatosan a kívánt állapotban tartja őket. Az Argo CD-be Entra ID-fiókkal lehet belépni, titok nélkül.
 
 ## Leadott anyagok
 
 | Elvárás | Hol található |
 |---|---|
-| Frissített környezetigénylési leírás | [`dokumentacio/kornyezetigenyles.md`](dokumentacio/kornyezetigenyles.md) (4.0) |
-| Terraform futtatása GitHub Actionsből | [`.github/workflows/terraform.yml`](.github/workflows/terraform.yml) |
-| Kubernetesen belüli erőforrások Terraformból (Helm) | [`terraform/ingress.tf`](terraform/ingress.tf), [`external-dns.tf`](terraform/external-dns.tf), [`cert-manager.tf`](terraform/cert-manager.tf), [`demo-app.tf`](terraform/demo-app.tf) |
-| PR → `validate` + `plan` | a workflow `Terraform Plan (<env>)` jobjai és az összesítő `Terraform Plan` ellenőrzés |
-| Ruleset a fő ágon (csak PR, kötelező plan, csak naprakész ág) | [`bootstrap/02-github-repo.sh`](bootstrap/02-github-repo.sh) `ruleset` |
-| Merge → `apply` | a workflow `Terraform Apply (<env>)` jobjai |
-| Környezetek szeparálása | Terraform workspace-ek + [`terraform/environments/`](terraform/environments), workspace-védelem a [`common.tf`](terraform/common.tf)-ben |
-| A pipeline identitása (titok nélkül) | [`bootstrap/01-azure-github-identity.sh`](bootstrap/01-azure-github-identity.sh) |
-| Igénylőlap | [`.github/pull_request_template.md`](.github/pull_request_template.md) |
-| Igénylő pull requestek | a repó *Pull requests* fülén: a `dev` környezet igénylése (merge-ölve) és a `dev` meghosszabbítása (nyitva) |
+| Frissített környezetigénylési leírás | [`dokumentacio/kornyezetigenyles.md`](dokumentacio/kornyezetigenyles.md) (5.0) |
+| A Helm-telepítések Argo CD Application-ökké alakítva | [`terraform/argocd.tf`](terraform/argocd.tf) (`helm_release.argocd_app`), a komponensek leírása: [`ingress.tf`](terraform/ingress.tf), [`external-dns.tf`](terraform/external-dns.tf), [`cert-manager.tf`](terraform/cert-manager.tf), [`demo-app.tf`](terraform/demo-app.tf) |
+| `platform` / `product` projekt minden alkalmazáshoz | [`terraform/argocd.tf`](terraform/argocd.tf) (`helm_release.argocd_projects`): platformkomponensek → `platform`, demóalkalmazás → `product` |
+| AutoSync és finalizer minden alkalmazáson | `syncPolicy.automated` (prune, selfHeal, retry) és `resources-finalizer.argocd.argoproj.io` |
+| Terraform-szintű függőség az Argo CD-től és a projektektől | `depends_on = [helm_release.argocd, helm_release.argocd_projects]` minden Application-ön |
+| Entra ID-belépés az Argo CD-be | [`terraform/argocd.tf`](terraform/argocd.tf): Entra ID-alkalmazás, workload identity (nincs client secret), RBAC a környezet csoportjai alapján |
+| Pull request, amely a `dev` környezetet igényli | a repó *Pull requests* fülén: „Környezetigénylés: project-x dev (5. hét)” |
+| A segédscript alapján az erőforrások listája | [`kimenetek/segedscript-kimenet-sbx.md`](kimenetek/segedscript-kimenet-sbx.md) (a script: [`segedscript/`](segedscript), futtatója: [`scripts/segedscript-futtatas.sh`](scripts/segedscript-futtatas.sh)) |
 
-## A 3. heti visszajelzések alapján változott
+## A 4. heti visszajelzések alapján változott
 
-- Mindhárom csoportnak (platform-admins, developers, readers) tagja vagyok, így a jogosultságok működés közben is látszanak.
-- A tagokat `név = "UPN"` térképpel adom meg, az object ID-t a Terraform keresi ki (`data "azuread_user"`).
-- Az Entra ID-csoportok és a tagságok külön fájlba kerültek: [`terraform/entra.tf`](terraform/entra.tf).
+- **Nincs külön igénylőlap.** Az igénylés minden adata (igénylő, csapat, indoklás, jóváhagyó, lejárat, tagok) a környezet `tfvars` fájljában van (`request` blokk). A Terraform ellenőrzi ([`common.tf`](terraform/common.tf): `validation`), és a `terraform_data.request` a state-ben is rögzíti. A PR-sablon csak egy rövid leírás és a review-lista.
+- **Lépcsőzetes apply.** Merge után először csak a sandbox (`sbx`) frissül; a többi környezet csak annak sikere után, kézi jóváhagyással ([`terraform.yml`](.github/workflows/terraform.yml): `apply-first` → `apply-promote`, GitHub environment: `promotion`; jóváhagyás: [`scripts/jovahagyas.sh`](scripts/jovahagyas.sh)).
+- **Bootstrap:** maradtak a scriptek (újrafuttathatók). A dokumentáció 4.2 pontja leírja, hogy élesben ez egy külön, a projekten kívüli Terraform-kód lenne.
+
+## Korábbi hetek
+
+| Hét | Tag | Tartalom |
+|---|---|---|
+| 3. | `week3-iac` | Terraform, környezetenként külön kód |
+| 4. | `week4-pipeline-tf` | GitHub Actions pipeline, workspace-ek, ruleset, a Kubernetes-komponensek Helmmel Terraformból |
+| 5. | `week5-argocd-basics` | Argo CD, Application-ök Terraformból, Entra ID-belépés |
 
 ## Gyorsindítás
 
 ```bash
-az login && ./bootstrap/01-azure-github-identity.sh        # egyszer: a pipeline identitása
+az login && ./bootstrap/01-azure-github-identity.sh        # egyszer (5. héttől: + Application Developer)
 gh auth login && ./bootstrap/02-github-repo.sh secrets     # egyszer: repo secretek
 ./bootstrap/02-github-repo.sh default-branch               # egyszer: alapértelmezett ág
+./bootstrap/02-github-repo.sh environments                 # egyszer: jóváhagyás a sandbox utáni környezetekhez
 ./bootstrap/02-github-repo.sh ruleset                      # egyszer, az első sikeres futás után
 ```
 
-Ezután egy környezet igénylése: ág, `terraform/environments/<env>.tfvars` a sablonból, pull request (lásd a leírás 3. fejezetét).
+Ezután egy környezet igénylése: ág, `terraform/environments/<env>.tfvars` a sablonból, pull request (lásd a leírás 3. fejezetét). Lebontás: `./scripts/lebontas.sh <env>`.

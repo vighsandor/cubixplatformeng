@@ -1,56 +1,24 @@
 <!--
-Környezetigénylés / -módosítás – Project platform
-Kitöltési útmutató: dokumentacio/kornyezetigenyles.md, 3. fejezet.
-A géppel feldolgozott rész a terraform/environments/<env>.tfvars fájl ebben a
-pull requestben; ez a leírás az emberi kontextus hozzá. A `[ ]` jelet `[x]`-re
-cseréld a megfelelő sorban. A *-gal jelölt mezők kötelezők.
+Környezetigénylés / -módosítás / platformváltozás.
+
+Az igénylés MINDEN adata (igénylő, csapat, indoklás, jóváhagyó, lejárat,
+tagok, méret) a terraform/environments/<env>.tfvars fájlban van, a `request`
+blokkban – itt nem kell megismételni. A Terraform ellenőrzi (validation), és a
+plan-ben is látszik (terraform_data.request).
+Útmutató: dokumentacio/kornyezetigenyles.md, 3. fejezet.
 -->
 
-## 1. Az igénylés típusa *
+## Röviden
 
-- [ ] Új környezet (új `terraform/environments/<env>.tfvars`)
-- [ ] Módosítás (tagok, méret)
-- [ ] Meghosszabbítás (`expires`)
-- [ ] Megszüntetés
-- [ ] Platformváltozás (a Terraform-kód módosítása – csak platform engineer)
-
-## 2. Igénylő
-
-| Mező | Érték |
-|---|---|
-| Név * | |
-| Entra ID UPN * | |
-| Csapat * | |
-| Költséghely / jóváhagyó vezető * | |
-
-## 3. Környezet
-
-| Mező | Érték |
-|---|---|
-| Projekt * | |
-| Környezet (`env_name`, = a tfvars fájl neve) * | |
-| Mire használjátok? * | |
-| Mikorra kell? * | |
-| Lejárat (`expires`, max. 3 hónap) * | |
-
-## 4. Hozzáférés
-
-A tfvars `developers` (írás) és `readers` (olvasás) térképébe írd be a tagokat
-`név = "UPN"` formában. Itt csak azt írd le, ha valami eltér a megszokottól.
-
-## 5. Erőforrásméret
-
-- [ ] Alapértelmezett: 1 node, 2 vCPU, 8 GiB RAM (`Standard_D2as_v5`)
-- [ ] Egyedi (`node_vm_size` / `node_count` a tfvars-ban). Indoklás:
-
-## 6. Megjegyzés
+<!-- Egy-két mondat: mit változtat ez a pull request (pl. "Új dev környezet", "dev meghosszabbítása", "Argo CD bevezetése"). -->
 
 ---
 
-### Platform engineer tölti ki (review)
+### Platform engineer (review)
 
-- [ ] A `Terraform Plan` ellenőrzés zöld, és a plan **csak** az igényelt környezetet érinti
-- [ ] A `vnet_address_space` / `node_subnet_prefix` szabad, át nem fedő tartomány
-- [ ] Kvóta ellenőrizve (DASv5 / régiós vCPU)
-- [ ] A tagok UPN-jei léteznek (a plan kikereste őket)
-- [ ] Merge után: a `Terraform Apply` sikeres, átadó üzenet elküldve
+- [ ] A `Terraform Plan` ellenőrzés zöld, és a plan **csak** a kért környezetet / változást érinti (csere: `-/+` nincs)
+- [ ] A `request` blokk kitöltve, az indoklás és a lejárat (max. 3 hónap) rendben
+- [ ] Új környezetnél: a `vnet_address_space` / `node_subnet_prefix` szabad, át nem fedő tartomány; a kvóta elég
+- [ ] Merge után: a sandbox (`sbx`) apply-ja sikeres, ott minden rendben (Argo CD: *Synced* / *Healthy*)
+- [ ] Csak ezután: a továbbvitel jóváhagyva (*Review deployments* / `scripts/jovahagyas.sh`), az apply sikeres
+- [ ] Az Argo CD-be Entra ID-val be lehet lépni, átadó üzenet elküldve

@@ -31,52 +31,47 @@ resource "azurerm_role_assignment" "external_dns_zone_contributor" {
   principal_type       = "ServicePrincipal"
 }
 
-# A values már nem kézzel kitöltött sablonból jön: minden érték közvetlenül a
-# Terraform-erőforrásokból származik, így nem lehet elgépelni vagy elavult
-# azonosítót használni.
-resource "helm_release" "external_dns" {
-  name             = "external-dns"
-  repository       = "https://kubernetes-sigs.github.io/external-dns/"
-  chart            = "external-dns"
-  version          = "1.20.0"
-  namespace        = local.external_dns_namespace
-  create_namespace = true
+# External DNS – Argo CD Application (platform projekt). A values már nem kézzel
+# kitöltött sablonból jön: minden érték közvetlenül a Terraform-erőforrásokból
+# származik, így nem lehet elgépelni vagy elavult azonosítót használni.
+locals {
+  app_external_dns = {
+    project   = local.argocd_project_platform
+    namespace = local.external_dns_namespace
+    repo_url  = "https://kubernetes-sigs.github.io/external-dns/"
+    chart     = "external-dns"
+    revision  = "1.20.0"
+    values = yamlencode({
+      logFormat = "text"
+      podLabels = { "azure.workload.identity/use" = "true" }
 
-  values = [yamlencode({
-    logFormat = "text"
-    podLabels = { "azure.workload.identity/use" = "true" }
+      sources            = ["ingress"]
+      provider           = { name = "azure" }
+      policy             = "sync"
+      registry           = "txt"
+      triggerLoopOnEvent = true
 
-    sources            = ["ingress"]
-    provider           = { name = "azure" }
-    policy             = "sync"
-    registry           = "txt"
-    triggerLoopOnEvent = true
+      txtOwnerId    = replace(azurerm_dns_zone.env.name, ".", "-")
+      domainFilters = [azurerm_dns_zone.env.name]
 
-    txtOwnerId    = replace(azurerm_dns_zone.env.name, ".", "-")
-    domainFilters = [azurerm_dns_zone.env.name]
-
-    serviceAccount = {
-      name        = local.external_dns_service_account
-      annotations = { "azure.workload.identity/client-id" = azurerm_user_assigned_identity.external_dns.client_id }
-    }
-    secretConfiguration = {
-      enabled   = true
-      mountPath = "/etc/kubernetes"
-      data = {
-        "azure.json" = jsonencode({
-          subscriptionId               = data.azurerm_client_config.current.subscription_id
-          resourceGroup                = azurerm_resource_group.aks.name # az identitás resource groupja
-          useWorkloadIdentityExtension = true
-        })
+      serviceAccount = {
+        name        = local.external_dns_service_account
+        annotations = { "azure.workload.identity/client-id" = azurerm_user_assigned_identity.external_dns.client_id }
       }
-    }
-    extraArgs = ["--azure-resource-group=${azurerm_resource_group.dns.name}"] # a DNS-zóna resource groupja
-  })]
-
-  depends_on = [
-    time_sleep.rbac_propagation,
-    azurerm_federated_identity_credential.external_dns,
-    azurerm_role_assignment.external_dns_zone_contributor,
-    azurerm_dns_ns_record.delegation,
-  ]
+      secretConfiguration = {
+        enabled   = true
+        mountPath = "/etc/kubernetes"
+        data = {
+          "azure.json" = jsonencode({
+            subscriptionId               = data.azurerm_client_config.current.subscription_id
+            resourceGroup                = azurerm_resource_group.aks.name # az identitás resource groupja
+            useWorkloadIdentityExtension = true
+          })
+        }
+      }
+      extraArgs = ["--azure-resource-group=${azurerm_resource_group.dns.name}"] # a DNS-zóna resource groupja
+    })
+    sync_options       = []
+    ignore_differences = yamlencode([])
+  }
 }
