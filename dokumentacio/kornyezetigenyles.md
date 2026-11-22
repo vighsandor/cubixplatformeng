@@ -246,7 +246,7 @@ kubectl get nodes
 
 **Sikeres, ha** a `kubectl get nodes` kiír egy node-ot `Ready` állapotban.
 
-> Ha 403 / Forbidden hibát kapsz, jelentkezz ki és be újra (`az logout`, majd `az login`). A csoporttagság átvezetése néhány percig is tarthat.
+> Ha 403 / Forbidden hibát kapsz (*User does not have access to the resource in Azure*), jelentkezz ki és be újra (`az logout`, majd `az login`; ha ez sem elég: `kubelogin remove-cache-dir`). Az Azure CLI a gyorsítótárából egy korábbi tokent ad, amelyben az új környezet csoportjai még nincsenek benne (`groups` claim), az AKS pedig ezek alapján dönt. Új környezet átadása után ezért mindig friss bejelentkezés kell.
 
 ### 3.6 5. lépés: telepítsd az alkalmazásod
 
@@ -670,6 +670,7 @@ az login
 | `Error acquiring the state lock` | Egy másik futás (pl. egy merge apply-ja) épp ugyanazt a környezetet zárolja | A futás 10 percig vár; ha így is elbukik, *Re-run all jobs* |
 | A workspace-védelem hibát ad | A workspace és az `env_name` nem egyezik (pl. elgépelt fájlnév) | A `tfvars` fájl neve, az `env_name` és a workspace legyen azonos |
 | `helm_release`: *Unauthorized* / *forbidden* az első futáskor | Az AKS-szerepkör vagy a csoporttagság még nem lépett életbe | *Re-run all jobs* (az új plan már csak a hiányzó részt tartalmazza) |
+| `kubectl`: *… is forbidden: User "<object ID>" cannot list … User does not have access to the resource in Azure* egy új környezetben, saját fiókkal | A helyi Azure CLI / kubelogin tokenje az új környezet csoportjainak létrehozása előtt készült, ezért hiányoznak belőle a csoportok | `az logout && az login`; ha ez sem elég: `kubelogin remove-cache-dir` |
 | `helm_release`: *… is forbidden: User "<object ID>" cannot … User does not have access to the resource in Azure* új környezet első futásakor | A pipeline AKS-tokenje a futás elején készült, amikor az identitás még nem volt tagja az új platform-admins csoportnak | A pipeline identitása közvetlen szerepkört kap (`aks_pipeline`), ezért ez nem fordulhat elő. Régebbi kódnál: *Re-run all jobs*, az új futás tokenje már tartalmazza a csoportot. |
 | `kubelogin: executable file not found` | Hiányzik a kubelogin (a pipeline-ban az `azure/use-kubelogin` lépés, helyben a telepítés) | Telepítés |
 | `helm_release`: *Kubernetes cluster unreachable … exec: executable kubelogin failed with exit code 1* (az AKS létrehozása után), vagy *AADSTS700024: Client assertion is not within its valid time range* | A GitHub OIDC-tokenje csak néhány percig érvényes. Ha az Azure CLI csak az AKS létrehozása után (10+ perc) kér tokent az AKS scope-ra, a kérés már lejárt tokennel menne. | A workflow a bejelentkezés után rögtön kér egy AKS-tokent (*AKS-token előtöltése* lépés), amely kb. 60–90 percig érvényes. Ha mégis előfordul: *Re-run **all** jobs*, mert a csak az apply-t újrafuttató próbálkozás elavult plan-nel indulna (*Saved plan is stale*). |
@@ -682,6 +683,7 @@ az login
 | Argo CD belépés: *AADSTS50011: The redirect URI … does not match* | Az Entra ID-alkalmazás visszahívási címe nem egyezik az Argo CD címével | A `terraform plan` mutatja az eltérést; a címet a Terraform állítja (`argocd.tf`) |
 | Argo CD belépés: *AADSTS700213 / AADSTS70021* az `argocd-server` logjában | A workload identity federated credential nem egyezik (más namespace / service account, vagy a cluster újraépült más OIDC-kibocsátóval) | `kubectl -n argocd logs deploy/argocd-server`; Terraform-futás (a credential a cluster kibocsátójából jön) |
 | Argo CD belépés után üres felület, „no permissions” | A felhasználó nem tagja a környezet egyik csoportjának sem, vagy a tokenben nincs `groups` claim | Csoporttagság a `tfvars`-ban; a tokent a *User Info* oldalon lehet ellenőrizni (az Argo CD felületén bal oldalt) |
+| A böngésző / `curl` egy régi IP-címre megy, időtúllépés | Egy korábbi kézi bejegyzés az `/etc/hosts`-ban (ClickOps-időszak) felülírja a DNS-t | `grep cubix /etc/hosts`, a régi sor törlése |
 | Az Entra ID az első belépéskor „Need admin approval” üzenetet ad | A tenantban a felhasználói hozzájárulás tiltva van | Egy rendszergazda a portálon: *Enterprise applications → <projekt>-<env>-argocd → Permissions → Grant admin consent* |
 | Application: *SyncError … the server could not find the requested resource* / *no matches for kind ClusterIssuer* | A CRD még nem létezik (pl. a cert-manager még települ) | Nincs teendő: a retry néhány percen belül megoldja. Ha 10 próbálkozás után is áll, *SYNC* a felületen |
 | Application: *application destination … is not permitted in project* | A cél-namespace vagy a forrásrepó nincs engedélyezve a projektben | product: a platform namespace-ek tiltottak; új forrásrepó a projektbe pull requesttel |
