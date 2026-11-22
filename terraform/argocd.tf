@@ -69,14 +69,12 @@ resource "azuread_application" "argocd" {
   }
 }
 
-# Az Entra ID-alkalmazás példánya a tenantban (Enterprise application).
-# Tulajdonost itt nem adok meg: a létrehozó (a pipeline identitása, Application
-# Developer szerepkörrel) automatikusan tulajdonos lesz. Ha a provider a
-# létrehozás után a tulajdonosokat módosítaná, ahhoz ez a szerepkör nem elég
-# (403 Authorization_RequestDenied).
-resource "azuread_service_principal" "argocd" {
-  client_id = azuread_application.argocd.client_id
-}
+# Az Entra ID-alkalmazás tenantbeli példányát (service principal, "Enterprise
+# application") NEM a Terraform hozza létre: az Application Developer
+# szerepkörrel a pipeline nem tudja kezelni (módosítani, törölni) – 403
+# Authorization_RequestDenied. A példányt az Entra ID az első belépéskor, a
+# hozzájáruláskor (consent) magától létrehozza, és az alkalmazás törlésekor
+# vele együtt törli. (A korábban létrehozottat lásd: migracio.tf.)
 
 resource "azuread_application_federated_identity_credential" "argocd" {
   application_id = azuread_application.argocd.id
