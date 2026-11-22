@@ -3,7 +3,14 @@
 #
 # Környezetek: a terraform/environments/*.tfvars fájlok. Minden fájl egy
 # környezet (= Terraform workspace); új környezet igénylése = egy új tfvars
-# fájl pull requestben. A plan és az apply környezetenként, mátrixban fut.
+# fájl pull requestben. A plan környezetenként, mátrixban fut.
+#
+# Az apply LÉPCSŐZETES: merge után először csak a sandbox (sbx) frissül. A
+# validate és a plan nem szűr ki mindent; ha valami mégis rossz, a sandboxon
+# derül ki. A többi környezet apply-ja csak a sandbox sikere UTÁN, és csak
+# kézi jóváhagyással indul (GitHub environment: "promotion", kötelező
+# jóváhagyóval; jóváhagyás: Actions -> a futás -> Review deployments, vagy
+# scripts/jovahagyas.sh).
 # =============================================================================
 name: Terraform
 
@@ -32,14 +39,25 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       list: ${{ steps.list.outputs.list }}
+      first: ${{ steps.list.outputs.first }}
+      rest: ${{ steps.list.outputs.rest }}
     steps:
       - uses: actions/checkout@v5
       - id: list
         name: Környezetek listája (environments/*.tfvars)
+        env:
+          FIRST_ENV: sbx # ez frissül elsőként, jóváhagyás nélkül
         run: |
           list=$(find environments -maxdepth 1 -name '*.tfvars' -printf '%f\n' | sed 's/\.tfvars$//' | sort | jq -R . | jq -cs .)
-          echo "Környezetek: $list"
-          echo "list=$list" >> "$GITHUB_OUTPUT"
+          first=$(jq -r --arg f "$FIRST_ENV" 'if index($f) then $f else "" end' <<<"$list")
+          # üres mátrixot a GitHub nem fogad el, ezért "nincs" esetén egy jelölőérték
+          rest=$(jq -c --arg f "$FIRST_ENV" 'map(select(. != $f)) | if length == 0 then ["-"] else . end' <<<"$list")
+          echo "Környezetek: $list (elsőként: ${first:-nincs}, utána jóváhagyással: $rest)"
+          {
+            echo "list=$list"
+            echo "first=$first"
+            echo "rest=$rest"
+          } >> "$GITHUB_OUTPUT"
 
   plan:
     name: Terraform Plan (${{ matrix.env }})
@@ -52,32 +70,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
+      - uses: ./.github/actions/terraform-setup
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: AKS-token előtöltése a kubeloginnak
-        # A GitHub OIDC-token csak néhány percig érvényes. Az Azure CLI-nek az
-        # AKS (Entra ID server app) scope-ra most kell tokent kérnie, különben a
-        # hosszú AKS-létrehozás után a kubelogin már lejárt tokennel próbálkozna.
-        # A token kb. 60-90 percig érvényes, és az Azure CLI gyorsítótárából adja.
-        run: az account get-access-token --resource 6dae42f8-4368-4678-94ff-3960e28e3630 --query expiresOn -o tsv
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_wrapper: false
-
-      - name: Install Azure kubelogin
-        uses: azure/use-kubelogin@v1
-        env:
-          # a 'latest' feloldásához a GitHub API-t hívja, ehhez token kell
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          kubelogin-version: latest
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Terraform fmt
         run: terraform fmt -check -recursive
@@ -109,7 +107,7 @@ jobs:
         with:
           name: terraform-plan-${{ matrix.env }}
           path: terraform-plan-${{ matrix.env }}.tar.gz
-          retention-days: 1
+          retention-days: 7 # ennyi ideig lehet jóváhagyni a továbbvitelt
 
   # Egyetlen, állandó nevű ellenőrzés a rulesethez: a mátrix-jobok neve
   # környezetenként más, a kötelező check viszont csak fix név lehet.
@@ -125,71 +123,60 @@ jobs:
           echo "plan eredménye: ${{ needs.plan.result }}"
           test "${{ needs.plan.result }}" = "success"
 
-  apply:
-    name: Terraform Apply (${{ matrix.env }})
+  # 1. lépcső: a sandbox, jóváhagyás nélkül
+  apply-first:
+    name: Terraform Apply (${{ needs.environments.outputs.first }})
     needs: [environments, plan-result]
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/platformeng-w3'
+    if: >-
+      github.event_name != 'pull_request' && github.ref == 'refs/heads/platformeng-w3'
+      && needs.environments.outputs.first != ''
     runs-on: ubuntu-latest
+    concurrency:
+      group: terraform-apply-${{ needs.environments.outputs.first }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/terraform-setup
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: ./.github/actions/terraform-apply
+        with:
+          env: ${{ needs.environments.outputs.first }}
+
+  # 2. lépcső: a többi környezet, csak a sandbox sikere után és jóváhagyással
+  apply-promote:
+    name: Terraform Apply (${{ matrix.env }})
+    needs: [environments, plan-result, apply-first]
+    if: >-
+      always() && !cancelled()
+      && github.event_name != 'pull_request' && github.ref == 'refs/heads/platformeng-w3'
+      && needs.plan-result.result == 'success'
+      && (needs.apply-first.result == 'success' || needs.apply-first.result == 'skipped')
+      && needs.environments.outputs.rest != '["-"]'
+    runs-on: ubuntu-latest
+    environment: promotion # kötelező jóváhagyó (bootstrap/02-github-repo.sh environments)
     strategy:
       fail-fast: false
       matrix:
-        env: ${{ fromJSON(needs.environments.outputs.list) }}
+        env: ${{ fromJSON(needs.environments.outputs.rest) }}
     concurrency:
       group: terraform-apply-${{ matrix.env }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v5
 
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
+      - uses: ./.github/actions/terraform-setup
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: AKS-token előtöltése a kubeloginnak
-        # A GitHub OIDC-token csak néhány percig érvényes. Az Azure CLI-nek az
-        # AKS (Entra ID server app) scope-ra most kell tokent kérnie, különben a
-        # hosszú AKS-létrehozás után a kubelogin már lejárt tokennel próbálkozna.
-        # A token kb. 60-90 percig érvényes, és az Azure CLI gyorsítótárából adja.
-        run: az account get-access-token --resource 6dae42f8-4368-4678-94ff-3960e28e3630 --query expiresOn -o tsv
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - uses: ./.github/actions/terraform-apply
         with:
-          terraform_wrapper: false
-
-      - name: Install Azure kubelogin
-        uses: azure/use-kubelogin@v1
-        env:
-          # a 'latest' feloldásához a GitHub API-t hívja, ehhez token kell
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          kubelogin-version: latest
-
-      - name: Plan letöltése
-        uses: actions/download-artifact@v5
-        with:
-          name: terraform-plan-${{ matrix.env }}
-          path: .
-
-      - name: Plan kicsomagolása
-        run: tar -xzf ../terraform-plan-${{ matrix.env }}.tar.gz
-
-      - name: Terraform init
-        run: terraform init
-
-      - name: Terraform workspace (${{ matrix.env }})
-        run: terraform workspace select ${{ matrix.env }}
-
-      - name: Terraform apply (pontosan a jóváhagyott plan)
-        run: terraform apply -lock-timeout=10m tfplan
-
-      - name: Kimenetek
-        run: |
-          {
-            echo "## Terraform apply – ${{ matrix.env }}"
-            echo '```'
-            terraform output
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          env: ${{ matrix.env }}

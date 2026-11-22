@@ -4,10 +4,13 @@
 #
 # Létrehozza / ellenőrzi (újrafuttatható):
 #   - a github-repos managed identityt a course-baseline resource groupban
-#   - a federated credentialöket (a fő ágra és a pull requestekre) – titok nélkül
+#   - a federated credentialöket (a fő ágra, a pull requestekre és a
+#     "promotion" GitHub environmentre, amelyben a sandbox utáni környezetek
+#     apply-ja fut) – titok nélkül
 #   - Azure-jogok: Owner az előfizetésen, Storage Blob Data Contributor a state-en
 #   - Entra ID-szerepkörök: Groups Administrator (csoportok kezelése),
-#     Directory Readers (felhasználók kikeresése UPN alapján)
+#     Directory Readers (felhasználók kikeresése UPN alapján),
+#     Application Developer (az Argo CD Entra ID-alkalmazásának létrehozása, 5. hét)
 #
 # Futtatás: saját felhasználóval, `az login` után (Owner + Entra-adminjog kell).
 # =============================================================================
@@ -21,11 +24,13 @@ STATE_SA="platencbvighsandor"
 GH_OWNER="${GH_OWNER:-vighsandor}"
 GH_REPO="${GH_REPO:-cubixplatformeng}"
 GH_BRANCH="${GH_BRANCH:-platformeng-w3}"
+GH_ENVIRONMENT="${GH_ENVIRONMENT:-promotion}" # a jóváhagyásos apply GitHub environmentje
 
 GITHUB_ISSUER="https://token.actions.githubusercontent.com"
 AUDIENCE="api://AzureADTokenExchange"
 ROLE_GROUPS_ADMIN="fdd7a751-b60b-444a-984c-02652fe8fa1c"     # Groups Administrator
 ROLE_DIRECTORY_READERS="88d8e3e3-8f55-4a1e-953a-9b9898b8876b" # Directory Readers
+ROLE_APP_DEVELOPER="cf1c38e5-3621-4004-a7cb-879624dced7c"     # Application Developer
 
 log() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 retry() { local i; for i in 1 2 3 4 5 6; do "$@" && return 0; echo "  újrapróbálás ${i}/6 (20 s)..."; sleep 20; done; return 1; }
@@ -59,6 +64,9 @@ declare -A CREDS=(
   ["pull-request"]="${NEW_PREFIX}:pull_request"
   ["branch-${GH_BRANCH}-legacy"]="${OLD_PREFIX}:ref:refs/heads/${GH_BRANCH}"
   ["pull-request-legacy"]="${OLD_PREFIX}:pull_request"
+  # Ha egy job GitHub environmentben fut, a token subjectje az environment, nem az ág
+  ["environment-${GH_ENVIRONMENT}"]="${NEW_PREFIX}:environment:${GH_ENVIRONMENT}"
+  ["environment-${GH_ENVIRONMENT}-legacy"]="${OLD_PREFIX}:environment:${GH_ENVIRONMENT}"
 )
 log "Federated credentials"
 for name in "${!CREDS[@]}"; do
@@ -102,6 +110,7 @@ directory_role() { # $1=role template id $2=név
 log "Entra ID-szerepkörök"
 directory_role "$ROLE_GROUPS_ADMIN" "Groups Administrator"
 directory_role "$ROLE_DIRECTORY_READERS" "Directory Readers"
+directory_role "$ROLE_APP_DEVELOPER" "Application Developer"
 
 log "Kész. A GitHub repo secretjei (a 02-github-repo.sh beállítja őket):"
 cat <<INFO

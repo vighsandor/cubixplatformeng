@@ -12,13 +12,13 @@ variable "platform_admins" {
 }
 
 variable "developers" {
-  description = "Írási jogú fejlesztők: név => Entra ID UPN (igénylőlap 5. pont)."
+  description = "Írási jogú fejlesztők: név => Entra ID UPN (a tfvars-ban, a request blokk mellett)."
   type        = map(string)
   default     = {}
 }
 
 variable "readers" {
-  description = "Olvasási jogú tagok: név => Entra ID UPN (igénylőlap 5. pont)."
+  description = "Olvasási jogú tagok: név => Entra ID UPN (a tfvars-ban, a request blokk mellett)."
   type        = map(string)
   default     = {}
 }

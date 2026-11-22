@@ -1,0 +1,49 @@
+# Egy környezet apply-ja: pontosan azt a plan-t alkalmazza, amit ugyanennek a
+# futásnak a plan jobja készített (artifact), nem számol újat.
+name: Terraform apply
+description: A futás plan-jének alkalmazása egy környezetre
+
+inputs:
+  env:
+    description: A környezet (= workspace) neve
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Plan letöltése
+      uses: actions/download-artifact@v5
+      with:
+        name: terraform-plan-${{ inputs.env }}
+        path: .
+
+    - name: Plan kicsomagolása
+      shell: bash
+      working-directory: terraform
+      run: tar -xzf ../terraform-plan-${{ inputs.env }}.tar.gz
+
+    - name: Terraform init
+      shell: bash
+      working-directory: terraform
+      run: terraform init
+
+    - name: Terraform workspace (${{ inputs.env }})
+      shell: bash
+      working-directory: terraform
+      run: terraform workspace select ${{ inputs.env }}
+
+    - name: Terraform apply (pontosan a jóváhagyott plan)
+      shell: bash
+      working-directory: terraform
+      run: terraform apply -lock-timeout=10m tfplan
+
+    - name: Kimenetek
+      shell: bash
+      working-directory: terraform
+      run: |
+        {
+          echo "## Terraform apply – ${{ inputs.env }}"
+          echo '```'
+          terraform output
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
