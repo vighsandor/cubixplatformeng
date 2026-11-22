@@ -33,3 +33,10 @@ removed {
   from = helm_release.demo_app
   lifecycle { destroy = false }
 }
+
+# Az Argo CD service principalját a pipeline nem tudja törölni (403), ezért a
+# Terraform csak elengedi; az Entra ID az alkalmazással együtt törli (argocd.tf).
+removed {
+  from = azuread_service_principal.argocd
+  lifecycle { destroy = false }
+}

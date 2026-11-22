@@ -89,7 +89,7 @@ Minden erőforrás nevébe beleteszem a **projekt** és a **környezet** jelét,
 | Managed identity (AKS) | `<projekt>-<env>-aks` | `project-x-sbx-aks` | `project-x-dev-aks` | `azurerm_user_assigned_identity.aks` |
 | Managed identity (External DNS) | `<projekt>-<env>-externaldns` | `project-x-sbx-externaldns` | `project-x-dev-externaldns` | `azurerm_user_assigned_identity.external_dns` |
 | Federated credential (External DNS) | `external-dns` | `external-dns` | `external-dns` | `azurerm_federated_identity_credential.external_dns` |
-| Entra ID-alkalmazás (Argo CD SSO) | `<projekt>-<env>-argocd` | `project-x-sbx-argocd` | `project-x-dev-argocd` | `azuread_application.argocd` (+ service principal, federated credential `argocd-server`) |
+| Entra ID-alkalmazás (Argo CD SSO) | `<projekt>-<env>-argocd` | `project-x-sbx-argocd` | `project-x-dev-argocd` | `azuread_application.argocd` (+ federated credential `argocd-server`; a tenantbeli példányt, az *Enterprise application*-t az Entra ID az első belépéskor hozza létre) |
 | Resource group (DNS) | `<projekt>-<env>-dns` | `project-x-sbx-dns` | `project-x-dev-dns` | `azurerm_resource_group.dns` |
 | DNS alzóna | `<projekt>.<env>.vighsandor.az.cubix-pe.hu` | `project-x.sbx.…` | `project-x.dev.…` | `azurerm_dns_zone.env` |
 | NS-delegáció a szülőzónában | `<projekt>.<env>` | `project-x.sbx` | `project-x.dev` | `azurerm_dns_ns_record.delegation` |
@@ -436,7 +436,7 @@ az login
 | **Storage Blob Data Contributor** a `platencbvighsandor` storage accounton | a state olvasása, írása, zárolása (az Owner adat-jogot nem ad) |
 | **Groups Administrator** Entra ID-szerepkör | Entra ID-csoportok létrehozása és a tagság kezelése |
 | **Directory Readers** Entra ID-szerepkör | a felhasználók kikeresése UPN alapján (`data "azuread_user"`) és a saját service principalja kikeresése |
-| **Application Developer** Entra ID-szerepkör (5. hét) | az Argo CD Entra ID-alkalmazásának (app registration + service principal) létrehozása. A létrehozó automatikusan tulajdonos lesz, így a federated credentialt is ő kezeli; más alkalmazáshoz nem nyúlhat |
+| **Application Developer** Entra ID-szerepkör (5. hét) | az Argo CD Entra ID-alkalmazásának (app registration) létrehozása. A létrehozó automatikusan tulajdonos lesz, így a federated credentialt is ő kezeli; más alkalmazáshoz nem nyúlhat. A service principalt (Enterprise application) ezzel a szerepkörrel nem tudja kezelni (403), ezért azt az Entra ID hozza létre az első belépéskor, és az alkalmazással együtt törli |
 
 > Az Azure-szerepkörök (Owner, Blob Data Contributor) és az Entra ID-szerepkörök (Groups Administrator, Directory Readers, Application Developer) két külön világ: az előbbiek az Azure-erőforrásokra, az utóbbiak a címtárra (felhasználók, csoportok) adnak jogot. Az Entra ID-szerepkörök kiosztásához Global Administrator vagy Privileged Role Administrator jog kell.
 
@@ -539,7 +539,7 @@ resource "terraform_data" "workspace_guard" {
 | `helm upgrade --install …` (Traefik, External DNS, cert-manager, colors) | Argo CD Application (`helm_release.argocd_app`, `bedag/raw`) |
 | `kubectl apply -f cluster-issuer.yaml` | Argo CD Application a `bedag/raw` charttal |
 | Argo CD felület: *+ NEW APP* (General, Source, Destination, Helm values, Sync Policy) | az Application `spec`-je: `project`, `source`, `destination`, `helm.valuesObject`, `syncPolicy` |
-| Entra ID: *App registrations → New registration*, *Token configuration → Add groups claim*, *Federated credentials* | `azuread_application`, `azuread_service_principal`, `azuread_application_federated_identity_credential` |
+| Entra ID: *App registrations → New registration*, *Token configuration → Add groups claim*, *Federated credentials* | `azuread_application`, `azuread_application_federated_identity_credential` (az *Enterprise application* az első belépéskor jön létre) |
 
 ### 4.4 A pipeline működése (`.github/workflows/terraform.yml`)
 
@@ -677,6 +677,7 @@ az login
 | A PR-on a `Terraform Plan` ellenőrzés „Expected — Waiting for status” | A workflow nem futott le (pl. a célág nem a `platformeng-w3`) | A PR célága legyen `platformeng-w3`; szükség esetén zárd be és nyisd újra a PR-t |
 | `terraform fmt -check` elbukik | Formázási eltérés | Helyben `terraform fmt -recursive terraform/`, commit, push |
 | Kvótahiba az apply-ban | Elfogyott a DASv5- vagy a régiós vCPU-kvóta | Kvótaemelés, `node_vm_size` másik családra (arra is kell kvóta), vagy egy nem használt környezet lebontása |
+| `azuread_service_principal`: *Failed to patch / Deleting Service Principal … 403 Authorization_RequestDenied* (régebbi kódnál) | Az Application Developer szerepkörrel a pipeline a service principalt nem tudja módosítani vagy törölni | A service principalt nem a Terraform kezeli (`argocd.tf`); a korábban létrehozottat a `migracio.tf` `removed` blokkja engedi el |
 | `azuread_application`: *Authorization_RequestDenied: Insufficient privileges* | A pipeline identitásának nincs *Application Developer* szerepköre | `01-azure-github-identity.sh` újrafuttatása; az Entra-szerepkör életbe lépése akár 10–15 perc |
 | Argo CD belépés: *AADSTS50011: The redirect URI … does not match* | Az Entra ID-alkalmazás visszahívási címe nem egyezik az Argo CD címével | A `terraform plan` mutatja az eltérést; a címet a Terraform állítja (`argocd.tf`) |
 | Argo CD belépés: *AADSTS700213 / AADSTS70021* az `argocd-server` logjában | A workload identity federated credential nem egyezik (más namespace / service account, vagy a cluster újraépült más OIDC-kibocsátóval) | `kubectl -n argocd logs deploy/argocd-server`; Terraform-futás (a credential a cluster kibocsátójából jön) |
